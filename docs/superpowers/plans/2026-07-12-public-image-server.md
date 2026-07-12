@@ -69,7 +69,7 @@ import { describe, expect, test } from "bun:test";
 import { loadConfig } from "../src/config";
 
 const valid = {
-  DATABASE_URL: "postgres://test:test@localhost:55432/test",
+  DATABASE_URL: "postgres://test:test@localhost:55432/infinite_canvas_test",
   AI_BASE_URL: "https://provider.example.com",
   AI_API_KEY: "secret",
   AI_MODEL: "image-model",
@@ -246,7 +246,7 @@ expect(setCookie).toContain("Max-Age=31536000");
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/test bun test tests/anonymous-session.test.ts`
+Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/infinite_canvas_test bun test tests/anonymous-session.test.ts`
 
 Expected: FAIL，会话路由不存在。
 
@@ -275,7 +275,7 @@ Cookie 不存在时插入客户端；Cookie 摘要不存在时签发新客户端
 
 - [ ] **Step 4: 运行会话测试**
 
-Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/test bun test tests/anonymous-session.test.ts`
+Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/infinite_canvas_test bun test tests/anonymous-session.test.ts`
 
 Expected: PASS，全部会话与来源断言通过。
 
@@ -333,7 +333,7 @@ expect(results.filter((item) => item.status === "fulfilled")).toHaveLength(10);
 
 - [ ] **Step 2: 运行并发测试确认失败**
 
-Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/test bun test tests/quota-service.test.ts`
+Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/infinite_canvas_test bun test tests/quota-service.test.ts`
 
 Expected: FAIL，配额服务不存在。
 
@@ -362,7 +362,7 @@ select daily_ip_quotas for update
 
 - [ ] **Step 5: 运行配额测试**
 
-Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/test bun test tests/quota-service.test.ts`
+Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/infinite_canvas_test bun test tests/quota-service.test.ts`
 
 Expected: PASS，并发、结算、幂等和过期用例全部通过。
 
@@ -452,7 +452,7 @@ expect(body.quota).toEqual({ limit: 10, used: 1, reserved: 0, remaining: 9, rese
 
 - [ ] **Step 2: 运行路由测试确认失败**
 
-Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/test bun test tests/images-route.test.ts`
+Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/infinite_canvas_test bun test tests/images-route.test.ts`
 
 Expected: FAIL，路由返回 404。
 
@@ -468,7 +468,7 @@ Expected: FAIL，路由返回 404。
 
 - [ ] **Step 5: 运行全部服务端测试**
 
-Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/test bun test`
+Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/infinite_canvas_test bun test`
 
 Expected: PASS，无失败测试。
 
@@ -514,7 +514,7 @@ Expected: FAIL，健康路由不存在。
 
 - [ ] **Step 5: 最终针对性验证**
 
-Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/test bun test`
+Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/infinite_canvas_test bun test`
 
 Run: `git diff --check`
 
