@@ -7,6 +7,7 @@ import { createAnonymousToken, hashAnonymousToken } from "../security/anonymous-
 import { hashDailyIp } from "../security/client-ip";
 
 const COOKIE_NAME = "anon_session";
+const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export type PublicRequestEnv = {
   Variables: {
@@ -32,6 +33,15 @@ export function requirePublicRequest({ config, sql }: Dependencies): MiddlewareH
       }
     }
 
+    const currentToken = getCookie(context, COOKIE_NAME);
+    const canCreateClient = context.req.method === "GET" && context.req.path === "/api/session";
+    if (currentToken === undefined && !canCreateClient) {
+      return context.json(invalidRequest("请先建立匿名会话"), 401);
+    }
+    if (currentToken !== undefined && !TOKEN_PATTERN.test(currentToken)) {
+      return context.json(invalidRequest("匿名会话凭证无效"), 403);
+    }
+
     const clientIp = context.req.header("CF-Connecting-IP");
     if (!clientIp) return context.json(invalidRequest("缺少可信的客户端地址"), 403);
 
@@ -43,23 +53,8 @@ export function requirePublicRequest({ config, sql }: Dependencies): MiddlewareH
       return context.json(invalidRequest("客户端地址无效"), 403);
     }
 
-    const currentToken = getCookie(context, COOKIE_NAME);
-    const currentClient = currentToken
-      ? (await sql<{ id: string; status: "active" | "disabled" }[]>`
-          select id, status
-          from anonymous_clients
-          where token_hash = ${await hashAnonymousToken(currentToken, config.anonTokenSecret)}
-        `)[0]
-      : undefined;
-
-    if (currentClient?.status === "disabled") {
-      return context.json(invalidRequest("此匿名客户端已被禁用"), 403);
-    }
-
-    let clientId = currentClient?.id;
-    if (clientId) {
-      await sql`update anonymous_clients set last_seen_at = now() where id = ${clientId}`;
-    } else {
+    let clientId: string;
+    if (currentToken === undefined) {
       const token = createAnonymousToken();
       clientId = crypto.randomUUID();
       await sql`
@@ -73,6 +68,21 @@ export function requirePublicRequest({ config, sql }: Dependencies): MiddlewareH
         maxAge: 31536000,
         path: "/",
       });
+    } else {
+      const [client] = await sql<{ id: string; status: "active" | "disabled" }[]>`
+        insert into anonymous_clients (id, token_hash, status)
+        values (
+          ${crypto.randomUUID()},
+          ${await hashAnonymousToken(currentToken, config.anonTokenSecret)},
+          'active'
+        )
+        on conflict (token_hash) do update set last_seen_at = now()
+        returning id, status
+      `;
+      if (client.status === "disabled") {
+        return context.json(invalidRequest("此匿名客户端已被禁用"), 403);
+      }
+      clientId = client.id;
     }
 
     context.set("clientId", clientId);

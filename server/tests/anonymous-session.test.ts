@@ -46,6 +46,11 @@ function readSessionToken(response: Response) {
   return token;
 }
 
+function trackIssuedToken(response: Response) {
+  const token = response.headers.get("set-cookie")?.match(/anon_session=([^;]+)/)?.[1];
+  if (token) trackedTokens.add(token);
+}
+
 async function findClientId(token: string) {
   const tokenHash = await hashAnonymousToken(token, config.anonTokenSecret);
   const [client] = await sql<{ id: string }[]>`
@@ -53,6 +58,16 @@ async function findClientId(token: string) {
   `;
   if (!client) throw new Error("anonymous client is missing");
   return client.id;
+}
+
+async function countClients(token?: string) {
+  const tokenHash = token && (await hashAnonymousToken(token, config.anonTokenSecret));
+  const [{ count }] = tokenHash
+    ? await sql<{ count: number }[]>`
+        select count(*)::int as count from anonymous_clients where token_hash = ${tokenHash}
+      `
+    : await sql<{ count: number }[]>`select count(*)::int as count from anonymous_clients`;
+  return count;
 }
 
 async function cleanupTestClients() {
@@ -162,14 +177,70 @@ describe("public anonymous session", () => {
     expect(await findClientId(token)).toBe(clientId);
   });
 
-  test("未知令牌换发新的匿名客户端", async () => {
+  test("未知令牌按原摘要注册并保留", async () => {
     const unknownToken = createAnonymousToken();
+    trackedTokens.add(unknownToken);
     const response = await request("/api/session", { Cookie: `anon_session=${unknownToken}` });
-    const issuedToken = readSessionToken(response);
+    trackIssuedToken(response);
 
     expect(response.status).toBe(200);
-    expect(issuedToken).not.toBe(unknownToken);
-    expect(await findClientId(issuedToken)).toBeString();
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(await findClientId(unknownToken)).toBeString();
+  });
+
+  test("相同未知令牌的并发会话请求收敛为一个客户端", async () => {
+    const unknownToken = createAnonymousToken();
+    trackedTokens.add(unknownToken);
+    const responses = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        request("/api/session", { Cookie: `anon_session=${unknownToken}` }),
+      ),
+    );
+    responses.forEach(trackIssuedToken);
+
+    expect(responses.map(({ status }) => status)).toEqual([200, 200, 200, 200]);
+    expect(responses.every((response) => response.headers.get("set-cookie") === null)).toBe(true);
+    expect(await countClients(unknownToken)).toBe(1);
+  });
+
+  test("额度接口缺少 Cookie 时返回 401 且不创建客户端", async () => {
+    const clientCount = await countClients();
+    const response = await request("/api/quota");
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(await response.json()).toEqual({
+      error: { code: "INVALID_REQUEST", message: "请先建立匿名会话" },
+    });
+    expect(await countClients()).toBe(clientCount);
+  });
+
+  test("POST 会话接口缺少 Cookie 时返回 401 且不创建客户端", async () => {
+    const clientCount = await countClients();
+    const response = await request(
+      "/api/session",
+      { Origin: config.publicOrigin },
+      "POST",
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(await response.json()).toEqual({
+      error: { code: "INVALID_REQUEST", message: "请先建立匿名会话" },
+    });
+    expect(await countClients()).toBe(clientCount);
+  });
+
+  test("非法 Cookie 返回 403 且不创建客户端", async () => {
+    const clientCount = await countClients();
+    const response = await request("/api/session", { Cookie: "anon_session=invalid" });
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(await response.json()).toEqual({
+      error: { code: "INVALID_REQUEST", message: "匿名会话凭证无效" },
+    });
+    expect(await countClients()).toBe(clientCount);
   });
 
   test("禁用客户端返回 403 且不换发 Cookie", async () => {
