@@ -1,0 +1,14 @@
+{
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "test": "bun test",
+    "migrate": "bun src/db/migrate.ts"
+  },
+  "dependencies": {
+    "file-type": "^22.0.1",
+    "hono": "^4.12.29",
+    "postgres": "^3.4.9",
+    "sharp": "^0.35.3"
+  }
+}
