@@ -185,7 +185,7 @@ const expected = {
 
 Run: `docker compose -f server/docker-compose.test.yml up -d`
 
-Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/test bun test tests/migration.test.ts`
+Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/infinite_canvas_test bun test tests/migration.test.ts`
 
 Expected: FAIL，迁移文件或表不存在。
 
@@ -207,7 +207,7 @@ create index generation_requests_expiry_idx on generation_requests (expires_at) 
 
 - [ ] **Step 4: 运行迁移测试**
 
-Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/test bun test tests/migration.test.ts`
+Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/infinite_canvas_test bun test tests/migration.test.ts`
 
 Expected: PASS，表与约束存在，重复执行迁移不报错。
 
