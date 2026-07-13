@@ -1,17 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { resolve } from "node:path";
 import { createApp } from "../src/app";
 import type { ServerConfig } from "../src/config";
-import { createSql } from "../src/db/client";
-import { runMigrations } from "../src/db/migrate";
-import { getShanghaiQuotaWindow } from "../src/routes/session";
 import { createAnonymousToken, hashAnonymousToken } from "../src/security/anonymous-token";
 import { hashDailyIp } from "../src/security/client-ip";
+import { getShanghaiQuotaWindow } from "../src/services/quota-snapshot";
+import { createDatabaseTestHarness } from "./helpers/database";
 
-const databaseUrl = process.env.TEST_DATABASE_URL;
-if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
-
-const sql = createSql(databaseUrl);
+const database = createDatabaseTestHarness({ migrate: true });
+const { sql } = database;
+const databaseUrl = process.env.TEST_DATABASE_URL!;
 const config: ServerConfig = {
   port: 3001,
   databaseUrl,
@@ -20,6 +17,7 @@ const config: ServerConfig = {
   aiModel: "private-model-name",
   anonTokenSecret: "anonymous-test-secret".padEnd(32, "a"),
   ipHashSecret: "ip-hash-test-secret".padEnd(32, "b"),
+  idempotencySecret: "idempotency-test-secret".padEnd(32, "c"),
   publicOrigin: "https://canvas.example.com",
   publicGenerationEnabled: true,
   dailyDeviceLimit: 10,
@@ -85,20 +83,15 @@ async function cleanupTestClients() {
   await sql`delete from anonymous_clients where id in ${sql(clientIds)}`;
 }
 
-beforeAll(async () => {
-  const [{ databaseName }] = await sql<{ databaseName: string }[]>`
-    select current_database() as "databaseName"
-  `;
-  if (databaseName !== "infinite_canvas_test") {
-    throw new Error(`anonymous session tests require infinite_canvas_test, received ${databaseName}`);
-  }
-  await runMigrations(sql, resolve(import.meta.dir, "../migrations"));
-});
+beforeAll(database.setup, { timeout: 120_000 });
 
 afterAll(async () => {
-  await cleanupTestClients();
-  await sql.end();
-});
+  try {
+    await cleanupTestClients();
+  } finally {
+    await database.teardown();
+  }
+}, { timeout: 120_000 });
 
 describe("anonymous token security", () => {
   test("创建 32 字节 base64url 随机令牌", () => {
@@ -282,14 +275,14 @@ describe("public anonymous session", () => {
     });
   });
 
-  test("额度接口读取当日设备成功数与预占数", async () => {
+  test("额度接口读取当日计数并将负 remaining 钳制为零", async () => {
     const first = await request();
     const token = readSessionToken(first);
     const clientId = await findClientId(token);
     const { quotaDate } = getShanghaiQuotaWindow(new Date());
     await sql`
       insert into daily_client_quotas (client_id, quota_date, success_count, reserved_count)
-      values (${clientId}, ${quotaDate}, 3, 2)
+      values (${clientId}, ${quotaDate}, 8, 4)
     `;
 
     const response = await request("/api/quota", { Cookie: `anon_session=${token}` });
@@ -297,9 +290,9 @@ describe("public anonymous session", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       limit: 10,
-      used: 3,
-      reserved: 2,
-      remaining: 5,
+      used: 8,
+      reserved: 4,
+      remaining: 0,
       resetAt: expect.stringMatching(/T16:00:00\.000Z$/),
     });
   });
@@ -312,18 +305,5 @@ describe("public anonymous session", () => {
     readSessionToken(response);
 
     expect(response.status).toBe(200);
-  });
-});
-
-describe("Shanghai quota window", () => {
-  test("北京时间零点切换额度日期与下次重置时间", () => {
-    expect(getShanghaiQuotaWindow(new Date("2026-07-12T15:59:59.999Z"))).toEqual({
-      quotaDate: "2026-07-12",
-      resetAt: "2026-07-12T16:00:00.000Z",
-    });
-    expect(getShanghaiQuotaWindow(new Date("2026-07-12T16:00:00.000Z"))).toEqual({
-      quotaDate: "2026-07-13",
-      resetAt: "2026-07-13T16:00:00.000Z",
-    });
   });
 });

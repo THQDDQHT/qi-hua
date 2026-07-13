@@ -6,6 +6,7 @@ export type ServerConfig = {
   aiModel: string;
   anonTokenSecret: string;
   ipHashSecret: string;
+  idempotencySecret: string;
   publicOrigin: string;
   publicGenerationEnabled: boolean;
   dailyDeviceLimit: number;
@@ -37,6 +38,12 @@ function integer(env: Env, name: string, fallback: number) {
   return value;
 }
 
+function smallintLimit(env: Env, name: string, fallback: number) {
+  const value = integer(env, name, fallback);
+  if (value > 32767) throw new Error(`${name} must be between 1 and 32767`);
+  return value;
+}
+
 function boolean(env: Env, name: string, fallback: boolean) {
   const raw = env[name];
   if (raw === undefined) return fallback;
@@ -57,10 +64,11 @@ export function loadConfig(env: Env): ServerConfig {
     aiModel: required(env, "AI_MODEL"),
     anonTokenSecret: secret(env, "ANON_TOKEN_SECRET"),
     ipHashSecret: secret(env, "IP_HASH_SECRET"),
+    idempotencySecret: secret(env, "IDEMPOTENCY_SECRET"),
     publicOrigin: required(env, "PUBLIC_ORIGIN"),
     publicGenerationEnabled: boolean(env, "PUBLIC_GENERATION_ENABLED", true),
-    dailyDeviceLimit: integer(env, "DAILY_DEVICE_LIMIT", 10),
-    dailyIpLimit: integer(env, "DAILY_IP_LIMIT", 30),
+    dailyDeviceLimit: smallintLimit(env, "DAILY_DEVICE_LIMIT", 10),
+    dailyIpLimit: smallintLimit(env, "DAILY_IP_LIMIT", 30),
     timezone,
     upstreamTimeoutMs: integer(env, "UPSTREAM_TIMEOUT_MS", 180000),
     reservationTtlSeconds: integer(env, "RESERVATION_TTL_SECONDS", 600),

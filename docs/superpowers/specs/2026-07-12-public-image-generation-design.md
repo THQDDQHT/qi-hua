@@ -126,7 +126,9 @@ primary key (ip_hash, quota_date)
 id               uuid primary key
 client_id        uuid not null
 request_key      text not null
+payload_fingerprint bytea not null
 ip_hash          bytea not null
+quota_date       date not null
 requested_count  smallint not null
 reserved_count   smallint not null
 success_count    smallint not null default 0
@@ -138,7 +140,7 @@ completed_at     timestamptz null
 unique (client_id, request_key)
 ```
 
-请求表不保存提示词、参考图或生成图片。完成后只保留结算和诊断所需的元数据。
+请求表不保存提示词、参考图或生成图片。`payload_fingerprint` 是使用独立 `IDEMPOTENCY_SECRET` 计算的 32 字节 HMAC-SHA-256，用于确认同一 `requestKey` 是否代表相同语义载荷；指纹或数量不同返回 `IDEMPOTENCY_CONFLICT`（HTTP 409）。`quota_date` 在预占时写入，结算和过期回收只修改请求行记录的日期；面向用户的快照始终读取当前北京时间配额日。完成后只保留结算和诊断所需的元数据。
 
 ## 核心机制：事务预占与按成功结算
 
@@ -146,11 +148,11 @@ unique (client_id, request_key)
 
 1. 验证匿名设备、来源、请求参数和 `requestKey`。
 2. 读取 Cloudflare 传递的访客地址并计算当日地址摘要。
-3. 在一个 PostgreSQL 事务中按 `(client_id, request_key)` 插入请求行；并发重复请求通过唯一约束等待首个事务完成，再读取已有请求。
-4. 先锁定生成请求行，再创建或读取设备额度与地址额度行。
-5. 始终按“生成请求行、设备额度行、地址额度行”的顺序执行 `SELECT FOR UPDATE`，预占、结算和过期回收都必须遵守相同顺序。
+3. 在一个 PostgreSQL 事务中按 `(client_id, request_key)` 插入带完整预占数和载荷指纹的请求行；并发重复请求通过唯一约束等待首个事务完成，再锁定已有请求。
+4. 已有请求只在指纹和请求数量都相同时返回 replay；任一不同均返回幂等冲突，且不修改额度。
+5. 新请求按“生成请求行、设备额度行、地址额度行”的顺序执行 `SELECT FOR UPDATE`；预占、结算和过期回收都遵守相同顺序。
 6. 检查设备剩余额度和地址剩余额度，同时增加两张额度表的 `reserved_count`。
-7. 提交事务后再调用上游接口，数据库事务不能覆盖耗时的网络请求。
+7. 提交后调用原子 `claimForExecution`；只有得到 `claimed` 的执行者可以调用上游，数据库事务不能覆盖耗时网络请求。
 
 PostgreSQL 行锁保证同一设备或地址的并发请求串行完成额度判断，避免多个请求同时看到旧余额。统一锁顺序避免预占、结算、过期回收和重复提交之间形成锁等待环。
 
@@ -162,20 +164,20 @@ PostgreSQL 行锁保证同一设备或地址的并发请求串行完成额度判
 
 ### 结算流程
 
-1. 汇总实际成功槽位数量。
-2. 在新事务中锁定生成请求、设备额度和地址额度。
-3. 从两张额度表释放该请求的全部预占数。
-4. 将实际成功数增加到两张额度表的 `success_count`。
+1. 汇总实际成功槽位数量，并按 `SERVICE_UNAVAILABLE > PROVIDER_TIMEOUT > PROVIDER_REJECTED` 聚合受控请求级错误码。
+2. 在新事务中先锁定请求行并判断状态；只有 `running` 能首次结算。
+3. 再按固定顺序锁定请求账期的设备额度和地址额度。
+4. 从两张额度表释放该请求的全部预占数，并只增加实际成功数。
 5. 将请求更新为 `completed`、`partial` 或 `failed`。
-6. 返回每个槽位的结果和结算后的额度。
+6. 在同一事务中普通读取当前北京时间配额日的设备额度，并返回判别式结果。
 
-同一请求只能结算一次。重复的完成回调必须读取已完成状态并直接返回，不能再次修改额度。
+同一请求只能结算一次。终态重复回调先返回 `already-settled` 或 `expired`，忽略新的成功数和错误参数。只有本次得到 `settled` 的调用方可以交付临时图片；`already-settled` 不重复交付，`expired` 必须丢弃图片。
 
 ### 过期预占
 
-上游请求超时小于预占有效期，建议上游超时为 180 秒，预占有效期为 10 分钟。接口服务启动时和固定短周期内扫描过期的 `reserved` 或 `running` 请求，在事务中将它们标记为 `expired` 并释放对应预占。
+上游请求超时小于预占有效期，建议上游超时为 180 秒，预占有效期为 10 分钟。回收器每轮无锁读取最多 100 个候选，再为每个请求开启独立事务，将到期的 `reserved` 或 `running` 标记为不可逆的 `expired` 并释放对应预占。单条计数不一致只记录固定结构日志并继续；数据库系统错误立即中止本轮。
 
-如果数据库不可用，生成请求直接失败，不能绕过额度调用上游。服务进程退出时无法完成的请求由过期回收机制处理。
+结算和回收通过同一请求行锁线性化：结算先提交则可交付图片；回收先提交则迟到结算返回 `expired`。如果数据库不可用，生成请求直接失败，不能绕过额度调用上游。服务进程退出时无法完成的请求由过期回收机制处理。
 
 ## 接口设计
 
@@ -425,6 +427,7 @@ AI_API_KEY
 AI_MODEL
 ANON_TOKEN_SECRET
 IP_HASH_SECRET
+IDEMPOTENCY_SECRET
 PUBLIC_GENERATION_ENABLED=true
 DAILY_DEVICE_LIMIT=10
 DAILY_IP_LIMIT=30

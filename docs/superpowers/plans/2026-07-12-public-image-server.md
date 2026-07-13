@@ -36,13 +36,16 @@ server/src/db/quota-repository.ts            配额事务和请求状态持久�
 server/src/security/anonymous-token.ts       匿名令牌生成与摘要
 server/src/security/client-ip.ts             Cloudflare 地址读取与日摘要
 server/src/middleware/public-request.ts      同源、开关和匿名会话中间件
-server/src/services/quota-service.ts         预占、结算和过期回收
+server/src/services/quota-service.ts         预占、领取、结算和过期回收
+server/src/services/quota-snapshot.ts        上海配额窗口与统一额度快照
 server/src/services/image-provider.ts        上游图片生成与编辑
 server/src/services/image-validation.ts      提示词、参数和图片校验
 server/src/routes/session.ts                 会话与额度接口
 server/src/routes/images.ts                  图片生成与编辑接口
 server/src/routes/health.ts                  存活与就绪检查
-server/migrations/001_public_generation.sql  初始表结构
+server/migrations/001_public_generation.sql  历史初始表结构
+server/migrations/002_generation_request_accounting.sql 请求账期、载荷指纹和状态约束升级
+server/tests/helpers/database.ts              共享测试库文件级 advisory lock
 server/tests/*.test.ts                       单元与集成测试
 server/docker-compose.test.yml               隔离的 PostgreSQL 测试实例
 ```
@@ -75,6 +78,7 @@ const valid = {
   AI_MODEL: "image-model",
   ANON_TOKEN_SECRET: "a".repeat(32),
   IP_HASH_SECRET: "b".repeat(32),
+  IDEMPOTENCY_SECRET: "c".repeat(32),
   PUBLIC_ORIGIN: "https://canvas.example.com",
 };
 
@@ -177,7 +181,7 @@ const expected = {
   anonymous_clients: ["id", "token_hash", "status", "created_at", "last_seen_at", "disabled_at"],
   daily_client_quotas: ["client_id", "quota_date", "success_count", "reserved_count", "updated_at"],
   daily_ip_quotas: ["ip_hash", "quota_date", "success_count", "reserved_count", "updated_at"],
-  generation_requests: ["id", "client_id", "request_key", "ip_hash", "requested_count", "reserved_count", "success_count", "status", "error_code", "expires_at", "created_at", "completed_at"],
+  generation_requests: ["id", "client_id", "request_key", "payload_fingerprint", "ip_hash", "quota_date", "requested_count", "reserved_count", "success_count", "status", "error_code", "expires_at", "created_at", "completed_at"],
 };
 ```
 
@@ -289,28 +293,32 @@ git commit -m "feat(server): 增加匿名设备会话"
 ### Task 4: 事务配额预占、结算与过期回收
 
 **Files:**
+- Create: `server/migrations/002_generation_request_accounting.sql`
 - Create: `server/src/db/quota-repository.ts`
 - Create: `server/src/services/quota-service.ts`
+- Create: `server/src/services/quota-snapshot.ts`
+- Create: `server/tests/helpers/database.ts`
 - Test: `server/tests/quota-service.test.ts`
+- Test: `server/tests/quota-service.unit.test.ts`
+- Test: `server/tests/quota-snapshot.test.ts`
 
 **Interfaces:**
-- Produces: `reserveQuota(input): Promise<Reservation>`、`settleQuota(input): Promise<QuotaSnapshot>`、`expireReservations(now): Promise<number>`。
+- Produces: `reserveQuota` 的 `reserved/replay` 判别结果、`claimForExecution` 的 `claimed/not-claimed`、`settleQuota` 的 `settled/already-settled/expired`，以及带 `expired/skipped/inconsistent` 计数的有界回收结果。
 
 ```ts
 export type ReserveQuotaInput = {
   clientId: string;
   requestKey: string;
+  payloadFingerprint: Uint8Array;
   ipHash: Uint8Array;
   quotaDate: string;
   requestedCount: number;
   expiresAt: Date;
 };
 
-export type Reservation = {
-  requestId: string;
-  duplicate: boolean;
-  status: "reserved" | "running" | "completed" | "partial" | "failed" | "expired";
-};
+export type Reservation =
+  | { kind: "reserved"; requestId: string; status: "reserved" }
+  | { kind: "replay"; requestId: string; status: RequestStatus };
 ```
 
 - [ ] **Step 1: 写真实 PostgreSQL 并发测试**
@@ -342,23 +350,22 @@ Expected: FAIL，配额服务不存在。
 `reserveQuota` 的单个事务严格执行：
 
 ```text
-insert generation_requests on conflict do nothing
+以完整 reserved_count 和 payload_fingerprint 插入 generation_requests，冲突时不插入
 select generation_requests for update
-如果是已有请求，直接返回 duplicate=true
+已有请求仅在指纹和 requested_count 相同时返回 replay，否则返回 IDEMPOTENCY_CONFLICT
 insert daily_client_quotas on conflict do nothing
 select daily_client_quotas for update
 insert daily_ip_quotas on conflict do nothing
 select daily_ip_quotas for update
 检查设备 10 和地址 30
-更新两个 reserved_count
-更新请求为 reserved
+更新两个 reserved_count；任一步失败整体回滚
 ```
 
-`settleQuota` 和 `expireReservations` 同样先锁请求，再锁设备额度，最后锁地址额度。所有计数更新增加 `reserved_count >= reservedToRelease` 条件；受影响行数不是 1 时回滚并记录内部一致性错误。
+`claimForExecution` 原子完成 `reserved -> running`，只有 `claimed` 能调用上游；领取已到期的 `reserved` 会在同一事务释放预占并转为 `expired`。`settleQuota` 和 `expireById` 同样先锁请求，再锁设备额度，最后锁地址额度。结算先判断终态，只有 `running` 才校验并写账；所有计数更新增加 `reserved_count >= reservedToRelease` 条件，受影响行数不是 1 时回滚并记录内部一致性错误。回收先无锁读取最多 100 个候选，再逐请求独立事务处理。
 
 - [ ] **Step 4: 补齐结算测试**
 
-覆盖：4 张中成功 2 张后设备与地址均为 `success=2,reserved=0`；失败全部释放；重复结算不重复增加；过期回收只执行一次；北京时间日期函数在零点前后返回不同日期和正确 `resetAt`。
+覆盖：4 张中成功 2 张后设备与地址均为 `success=2,reserved=0`；失败全部释放；未领取请求不能结算；终态重放忽略新参数；过期后迟到结算返回 `expired`；跨北京时间零点只修改旧日账务并返回当前日额度；坏行不阻塞后续回收；结算和回收竞态只产生一个不可逆终态。
 
 - [ ] **Step 5: 运行配额测试**
 
@@ -366,12 +373,9 @@ Run: `cd server && TEST_DATABASE_URL=postgres://test:test@127.0.0.1:55432/infini
 
 Expected: PASS，并发、结算、幂等和过期用例全部通过。
 
-- [ ] **Step 6: 提交配额服务**
+- [ ] **Step 6: 等待明确提交指令**
 
-```bash
-git add server/src/db/quota-repository.ts server/src/services/quota-service.ts server/tests/quota-service.test.ts
-git commit -m "feat(server): 实现匿名图片额度结算"
-```
+完成专项、并行、完整测试、类型检查和代码审查后保持未暂存、未提交状态。只有用户明确要求时才逐文件暂存任务 4 文件；禁止使用 `git add .` 或 `git add -A`，并确认 `web/bun.lock` 不在暂存区。
 
 ### Task 5: 输入校验与上游生图客户端
 
@@ -436,7 +440,7 @@ git commit -m "feat(server): 增加生图参数校验和上游调用"
 - Test: `server/tests/images-route.test.ts`
 
 **Interfaces:**
-- Consumes: `reserveQuota`、`settleQuota`、`ImageProvider` 和会话上下文。
+- Consumes: `reserveQuota`、`claimForExecution`、判别式 `settleQuota`、`ImageProvider` 和会话上下文。路由生成规范载荷指纹并将 `IDEMPOTENCY_CONFLICT` 映射为 HTTP 409；只有 `claimed` 调用上游，只有本次 `settled` 交付图片，`already-settled` 不交付本次临时图片，`expired` 丢弃图片。
 - Produces: `POST /api/images/generations`、`POST /api/images/edits`。
 
 - [ ] **Step 1: 写路由行为测试**

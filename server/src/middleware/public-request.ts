@@ -2,8 +2,8 @@ import type { MiddlewareHandler } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { Sql } from "postgres";
 import type { ServerConfig } from "../config";
-import { getShanghaiQuotaWindow } from "../routes/session";
 import { createAnonymousToken, hashAnonymousToken } from "../security/anonymous-token";
+import { getShanghaiQuotaWindow } from "../services/quota-snapshot";
 import { hashDailyIp } from "../security/client-ip";
 
 const COOKIE_NAME = "anon_session";

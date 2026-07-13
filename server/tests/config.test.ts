@@ -8,6 +8,7 @@ const valid = {
   AI_MODEL: "image-model",
   ANON_TOKEN_SECRET: "a".repeat(32),
   IP_HASH_SECRET: "b".repeat(32),
+  IDEMPOTENCY_SECRET: "c".repeat(32),
   PUBLIC_ORIGIN: "https://canvas.example.com",
 };
 
@@ -22,5 +23,25 @@ describe("loadConfig", () => {
 
   test("缺少密钥时拒绝启动", () => {
     expect(() => loadConfig({ ...valid, AI_API_KEY: "" })).toThrow("AI_API_KEY");
+    expect(() => loadConfig({ ...valid, IDEMPOTENCY_SECRET: "" })).toThrow("IDEMPOTENCY_SECRET");
+    expect(() => loadConfig({ ...valid, IDEMPOTENCY_SECRET: "c".repeat(31) }))
+      .toThrow("IDEMPOTENCY_SECRET");
+  });
+
+  test("日额度限制必须适配 smallint", () => {
+    expect(loadConfig({
+      ...valid,
+      DAILY_DEVICE_LIMIT: "1",
+      DAILY_IP_LIMIT: "32767",
+    })).toMatchObject({ dailyDeviceLimit: 1, dailyIpLimit: 32767 });
+
+    for (const value of ["0", "-1", "1.5", "invalid", "32768"]) {
+      expect(() => loadConfig({ ...valid, DAILY_DEVICE_LIMIT: value })).toThrow("DAILY_DEVICE_LIMIT");
+      expect(() => loadConfig({ ...valid, DAILY_IP_LIMIT: value })).toThrow("DAILY_IP_LIMIT");
+    }
+  });
+
+  test("其他正整数配置不受 smallint 上限影响", () => {
+    expect(loadConfig({ ...valid, UPSTREAM_TIMEOUT_MS: "180000" }).upstreamTimeoutMs).toBe(180000);
   });
 });
