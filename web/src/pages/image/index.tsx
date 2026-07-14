@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Tooltip, Typography } from "antd";
+import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Select, Tag, Tooltip, Typography } from "antd";
 import localforage from "localforage";
 import { saveAs } from "file-saver";
 
@@ -9,12 +9,14 @@ import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { canvasThemes } from "@/lib/canvas-theme";
+import { appMode } from "@/lib/app-mode";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
+import { generateImages, generateSingleImage, type GeneratedImageResult } from "@/services/image-generation";
+import { usePublicSessionStore } from "@/stores/use-public-session-store";
 import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
-import { requestEdit, requestGeneration } from "@/services/api/image";
 import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
@@ -93,10 +95,32 @@ export default function ImagePage() {
     const imageCommand = useWorkbenchAgentStore((state) => state.imageCommand);
     const clearImageCommand = useWorkbenchAgentStore((state) => state.clearImageCommand);
     const processedCommandRef = useRef(0);
-
+    const publicSessionStatus = usePublicSessionStore((state) => state.status);
+    const publicSession = usePublicSessionStore((state) => state.session);
+    const publicQuota = usePublicSessionStore((state) => state.quota);
+    const publicSessionError = usePublicSessionStore((state) => state.error);
+    const applyPublicQuota = usePublicSessionStore((state) => state.applyQuota);
+    const refreshPublicQuota = usePublicSessionStore((state) => state.refreshQuota);
+    const publicMode = appMode === "public";
+    const publicGeneration = publicSession?.generation;
     const model = effectiveConfig.imageModel || effectiveConfig.model;
-    const canGenerate = Boolean(prompt.trim());
-    const generationCount = Math.max(1, Math.min(10, Number(config.count) || 1));
+    const generationCount = publicMode ? Number(config.count) : Math.max(1, Math.min(10, Number(config.count) || 1));
+    const publicOptionsReady = !publicMode || Boolean(publicGeneration && publicSessionStatus === "ready");
+    const publicOptionsValid =
+        !publicMode ||
+        Boolean(
+            publicGeneration &&
+            publicGeneration.counts.includes(generationCount) &&
+            publicGeneration.sizes.includes(effectiveConfig.size) &&
+            publicGeneration.qualities.includes(effectiveConfig.quality) &&
+            prompt.trim().length <= publicGeneration.maxPromptLength &&
+            references.length <= publicGeneration.maxReferenceImages,
+        );
+    const canGenerate =
+        Boolean(prompt.trim()) &&
+        publicOptionsReady &&
+        publicOptionsValid &&
+        (!publicMode || Boolean(publicGeneration?.enabled !== false && publicQuota && publicQuota.remaining >= generationCount));
 
     useEffect(() => {
         if (!running || !startedAt) return;
@@ -108,50 +132,67 @@ export default function ImagePage() {
         void refreshLogs();
     }, []);
 
+    useEffect(() => {
+        if (!publicMode || !publicGeneration) return;
+        if (!publicGeneration.counts.includes(Number(config.count))) updateConfig("count", String(publicGeneration.counts[0] ?? 1));
+        if (!publicGeneration.sizes.includes(effectiveConfig.size)) updateConfig("size", publicGeneration.sizes[0] ?? "auto");
+        if (!publicGeneration.qualities.includes(effectiveConfig.quality)) updateConfig("quality", publicGeneration.qualities[0] ?? "auto");
+    }, [config.count, effectiveConfig.quality, effectiveConfig.size, publicGeneration, publicMode, updateConfig]);
+
+    const publicReferenceLimit = publicGeneration?.maxReferenceImages ?? 4;
+    const remainingReferenceSlots = publicMode ? Math.max(0, publicReferenceLimit - references.length) : Number.POSITIVE_INFINITY;
+    const canAddReferences = remainingReferenceSlots > 0;
+
     const addReferences = async (files?: FileList | null) => {
-        const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
+        const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/") || (publicMode && !file.type));
+        if (!imageFiles.length) {
+            message.error("请选择图片文件");
+            return;
+        }
+        if (!canAddReferences) {
+            message.warning(`公众模式最多添加 ${publicReferenceLimit} 张参考图`);
+            return;
+        }
+        const acceptedFiles = imageFiles.slice(0, remainingReferenceSlots);
         const nextReferences = await Promise.all(
-            imageFiles.map(async (file) => {
+            acceptedFiles.map(async (file) => {
                 const image = await uploadImage(file);
                 return { id: nanoid(), name: file.name, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
             }),
         );
         setReferences((value) => [...value, ...nextReferences]);
+        if (acceptedFiles.length < imageFiles.length) message.warning(`仅添加前 ${acceptedFiles.length} 张参考图，公众模式最多 ${publicReferenceLimit} 张`);
     };
 
     const addReferencesFromClipboard = async () => {
         try {
+            if (!canAddReferences) {
+                message.warning(`公众模式最多添加 ${publicReferenceLimit} 张参考图`);
+                return;
+            }
             const items = await navigator.clipboard.read();
-            const blobs = await Promise.all(items.flatMap((item) => item.types.filter((type) => type.startsWith("image/")).map((type) => item.getType(type))));
+            const readableBlobs = await Promise.all(items.flatMap((item) => item.types.filter((type) => type.startsWith("image/") || (publicMode && !type)).map((type) => item.getType(type))));
+            const blobs = readableBlobs.filter((blob) => blob.type.startsWith("image/") || (publicMode && !blob.type));
             if (!blobs.length) {
                 message.error("剪切板里没有可读取的图片");
                 return;
             }
+            const acceptedBlobs = blobs.slice(0, remainingReferenceSlots);
             const nextReferences = await Promise.all(
-                blobs.map(async (blob, index) => {
+                acceptedBlobs.map(async (blob, index) => {
                     const image = await uploadImage(blob);
                     return { id: nanoid(), name: `clipboard-${index + 1}.png`, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
                 }),
             );
             setReferences((value) => [...value, ...nextReferences]);
             message.success(`已读取 ${nextReferences.length} 张参考图`);
+            if (acceptedBlobs.length < blobs.length) message.warning(`公众模式最多添加 ${publicReferenceLimit} 张参考图`);
         } catch {
             message.error("剪切板里没有可读取的图片");
         }
     };
 
     const generate = async () => {
-        const text = prompt.trim();
-        if (!text) {
-            message.error("请输入生图提示词");
-            return;
-        }
-        if (!isAiConfigReady(effectiveConfig, model)) {
-            message.warning("请先完成配置");
-            openConfigDialog(true);
-            return;
-        }
-
         const snapshot = buildRequestSnapshot();
         if (!snapshot) return;
 
@@ -162,25 +203,65 @@ export default function ImagePage() {
         const batchStartedAt = performance.now();
         setStartedAt(batchStartedAt);
 
-        const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot));
+        let successImages: GeneratedImage[] = [];
+        let failureMessage: string | undefined;
 
-        const result = await Promise.allSettled(tasks);
-        const successImages = result.filter((item): item is PromiseFulfilledResult<GeneratedImage> => item.status === "fulfilled").map((item) => item.value);
+        if (publicMode) {
+            try {
+                const batch = await generateImages({
+                    requestKey: crypto.randomUUID(),
+                    prompt: snapshot.text,
+                    count: generationCount,
+                    size: snapshot.config.size,
+                    quality: snapshot.config.quality,
+                    references: snapshot.references,
+                });
+                if (batch.quota) applyPublicQuota(batch.quota);
+                const resultByIndex = new Map(batch.results.map((result) => [result.index, result]));
+                const images = await Promise.all(
+                    Array.from({ length: generationCount }, async (_, index) => {
+                        const result = resultByIndex.get(index);
+                        if (!result) {
+                            setResults((value) => updateResultAt(value, index, { status: "failed", error: "服务未返回该图片的生成结果" }));
+                            return null;
+                        }
+                        if (result.status !== "success" || !result.image) {
+                            setResults((value) => updateResultAt(value, index, { status: "failed", error: publicGenerationError(result.errorCode) }));
+                            return null;
+                        }
+                        const image = await toGeneratedImage(result, performance.now() - batchStartedAt);
+                        setResults((value) => updateResultAt(value, index, { status: "success", image }));
+                        return image;
+                    }),
+                );
+                successImages = images.filter((image): image is GeneratedImage => Boolean(image));
+            } catch (error) {
+                failureMessage = publicGenerationError(error instanceof Error ? error.message : undefined);
+                setResults((value) => value.map((result) => ({ ...result, status: "failed", error: failureMessage, image: undefined })));
+                void refreshPublicQuota();
+            }
+        } else {
+            const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot));
+            const settled = await Promise.allSettled(tasks);
+            successImages = settled.flatMap((item) => (item.status === "fulfilled" ? [item.value] : []));
+            const failed = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
+            failureMessage = failed?.reason instanceof Error ? failed.reason.message : undefined;
+        }
+
         const successCount = successImages.length;
         const failCount = generationCount - successCount;
-        const failed = result.find((item): item is PromiseRejectedResult => item.status === "rejected");
-
         try {
-            const logImages = await Promise.all(
+            const storedImages = await Promise.allSettled(
                 successImages.map(async (image) => {
                     const stored = await uploadImage(image.dataUrl);
                     return { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
                 }),
             );
+            const logImages = storedImages.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
             saveLog(
                 buildLog({
-                    prompt: text,
-                    model,
+                    prompt: snapshot.text,
+                    model: publicMode ? publicGeneration?.modelLabel || "公众生图" : model,
                     config: { ...snapshot.config, count: String(generationCount) },
                     references: snapshot.references,
                     durationMs: performance.now() - batchStartedAt,
@@ -190,7 +271,11 @@ export default function ImagePage() {
                     images: logImages,
                 }),
             );
-            successCount ? message.success("图片已生成") : message.error(failed?.reason instanceof Error ? failed.reason.message : "生成失败");
+            if (storedImages.length !== logImages.length) message.warning("部分图片未能写入本地记录，但可继续下载或重试");
+            successCount ? message.success("图片已生成") : message.error(failureMessage || "生成失败");
+        } catch {
+            message.warning("生成结果未能写入本地记录，但仍可继续下载或重试");
+            successCount ? message.success("图片已生成") : message.error(failureMessage || "生成失败");
         } finally {
             setRunning(false);
         }
@@ -216,6 +301,10 @@ export default function ImagePage() {
     };
 
     const addResultToReferences = async (image: GeneratedImage, index: number) => {
+        if (!canAddReferences) {
+            message.warning(`公众模式最多添加 ${publicReferenceLimit} 张参考图`);
+            return;
+        }
         const stored = await uploadImage(image.dataUrl);
         setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
         message.success("已加入参考图");
@@ -239,6 +328,10 @@ export default function ImagePage() {
         if (payload.kind === "text") {
             setPrompt(payload.content);
         } else if (payload.kind === "image") {
+            if (!canAddReferences) {
+                message.warning(`公众模式最多添加 ${publicReferenceLimit} 张参考图`);
+                return;
+            }
             const stored = await uploadImage(payload.dataUrl);
             setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
         } else {
@@ -279,35 +372,66 @@ export default function ImagePage() {
         setLogsOpen(false);
         setPrompt(log.prompt);
         setReferences(log.references || []);
-        if (log.config.imageModel || log.model) updateConfig("imageModel", log.config.imageModel || log.model);
+        if (!publicMode && (log.config.imageModel || log.model)) updateConfig("imageModel", log.config.imageModel || log.model);
         if (log.config.quality) updateConfig("quality", log.config.quality);
         if (log.config.size) updateConfig("size", log.config.size);
         if (log.config.count) updateConfig("count", log.config.count);
         setResults(log.images.map((image) => ({ id: image.id, status: "success", image })));
     };
 
-    const buildRequestSnapshot = () => {
+    const buildRequestSnapshot = (requestedCount = generationCount) => {
         const text = prompt.trim();
         if (!text) {
             message.error("请输入生图提示词");
             return null;
         }
-        if (!isAiConfigReady(effectiveConfig, model)) {
+        if (publicMode) {
+            if (!publicGeneration || publicSessionStatus !== "ready") {
+                message.warning(publicSessionError || "公众生图会话尚未就绪");
+                return null;
+            }
+            if (text.length > publicGeneration.maxPromptLength) {
+                message.warning(`提示词不能超过 ${publicGeneration.maxPromptLength} 个字符`);
+                return null;
+            }
+            if (references.length > publicGeneration.maxReferenceImages) {
+                message.warning(`公众模式最多使用 ${publicGeneration.maxReferenceImages} 张参考图`);
+                return null;
+            }
+            if (!publicGeneration.counts.includes(requestedCount) || !publicGeneration.sizes.includes(effectiveConfig.size) || !publicGeneration.qualities.includes(effectiveConfig.quality)) {
+                message.warning("请选择服务支持的生成参数");
+                return null;
+            }
+            if (!publicQuota || publicQuota.remaining < requestedCount) {
+                message.warning("剩余额度不足，请调整生成数量后重试");
+                return null;
+            }
+        } else if (!isAiConfigReady(effectiveConfig, model)) {
             message.warning("请先完成配置");
             openConfigDialog(true);
             return null;
         }
-        return { text, config: { ...effectiveConfig, model, count: "1" }, references: [...references] };
+        return {
+            text,
+            config: publicMode ? { ...effectiveConfig, model: "", imageModel: "", count: "1" } : { ...effectiveConfig, model, count: "1" },
+            references: [...references],
+        };
     };
 
     const runGenerationSlot = async (index: number, snapshot: { text: string; config: AiConfig; references: ReferenceImage[] }) => {
         const itemStartedAt = performance.now();
         try {
-            const result = snapshot.references.length ? await requestEdit(snapshot.config, snapshot.text, snapshot.references) : await requestGeneration(snapshot.config, snapshot.text);
-            const image = result[0];
-            if (!image) throw new Error("接口没有返回图片");
+            const result = await generateSingleImage({
+                prompt: snapshot.text,
+                size: snapshot.config.size,
+                quality: snapshot.config.quality,
+                references: snapshot.references,
+                selfHostedConfig: snapshot.config,
+            });
+            const image = result.image;
+            if (!image) throw new Error(result.errorCode || "接口没有返回图片");
             const meta = await readImageMeta(image.dataUrl);
-            const nextImage = { id: image.id, dataUrl: image.dataUrl, durationMs: performance.now() - itemStartedAt, width: meta.width, height: meta.height, bytes: getDataUrlByteSize(image.dataUrl) };
+            const nextImage = { id: image.id, dataUrl: image.dataUrl, mimeType: image.mimeType, durationMs: performance.now() - itemStartedAt, width: meta.width, height: meta.height, bytes: getDataUrlByteSize(image.dataUrl) };
             setResults((value) => updateResultAt(value, index, { status: "success", image: nextImage }));
             return nextImage;
         } catch (error) {
@@ -317,20 +441,37 @@ export default function ImagePage() {
     };
 
     const retryResult = async (index: number) => {
-        const snapshot = buildRequestSnapshot();
+        const snapshot = buildRequestSnapshot(publicMode ? 1 : generationCount);
         if (!snapshot) return;
         setPreviewLog(null);
         setResults((value) => updateResultAt(value, index, { status: "pending", error: undefined, image: undefined }));
         const retryStartedAt = performance.now();
         try {
-            const image = await runGenerationSlot(index, snapshot);
+            let image: GeneratedImage;
+            if (publicMode) {
+                const batch = await generateImages({
+                    requestKey: crypto.randomUUID(),
+                    prompt: snapshot.text,
+                    count: 1,
+                    size: snapshot.config.size,
+                    quality: snapshot.config.quality,
+                    references: snapshot.references,
+                });
+                if (batch.quota) applyPublicQuota(batch.quota);
+                const result = batch.results[0];
+                if (!result || result.status !== "success" || !result.image) throw new Error(publicGenerationError(result?.errorCode));
+                image = await toGeneratedImage(result, performance.now() - retryStartedAt);
+                setResults((value) => updateResultAt(value, index, { status: "success", image }));
+            } else {
+                image = await runGenerationSlot(index, snapshot);
+            }
             const stored = await uploadImage(image.dataUrl);
             const logImage = { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
             setResults((value) => updateResultAt(value, index, { image: { ...image, dataUrl: stored.url, storageKey: stored.storageKey } }));
             saveLog(
                 buildLog({
                     prompt: snapshot.text,
-                    model,
+                    model: publicMode ? publicGeneration?.modelLabel || "公众生图" : model,
                     config: { ...snapshot.config, count: "1" },
                     references: snapshot.references,
                     durationMs: performance.now() - retryStartedAt,
@@ -341,8 +482,10 @@ export default function ImagePage() {
                 }),
             );
             message.success("重试成功");
-        } catch {
-            // runGenerationSlot 已经把结果状态更新为 failed
+        } catch (error) {
+            const errorMessage = publicMode ? publicGenerationError(error instanceof Error ? error.message : undefined) : error instanceof Error ? error.message : "生成失败";
+            setResults((value) => updateResultAt(value, index, { status: "failed", error: errorMessage, image: undefined }));
+            if (publicMode) void refreshPublicQuota();
         }
     };
 
@@ -392,17 +535,29 @@ export default function ImagePage() {
                                         </Button>
                                     </div>
                                 </div>
-                                <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder="描述画面主体、风格、构图、光线和用途" />
+                                <Input.TextArea value={prompt} maxLength={publicGeneration?.maxPromptLength} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder="描述画面主体、风格、构图、光线和用途" />
+                                {publicMode ? (
+                                    <div className="mt-2 space-y-1 text-sm text-stone-500 dark:text-stone-400" aria-live="polite">
+                                        {publicQuota ? (
+                                            <div>
+                                                今日可生成 {publicQuota.remaining}/{publicQuota.limit} 张
+                                            </div>
+                                        ) : null}
+                                        {publicGeneration ? <div>提示词最多 {publicGeneration.maxPromptLength} 个字符</div> : null}
+                                        {publicSessionStatus === "loading" || publicSessionStatus === "idle" ? <div>正在初始化公众生图会话…</div> : null}
+                                        {publicSessionStatus === "unavailable" ? <div className="text-red-600 dark:text-red-300">{publicSessionError || "公众生图会话不可用，请稍后重试"}</div> : null}
+                                    </div>
+                                ) : null}
                             </div>
 
                             <div className="min-w-0">
                                 <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">参考图</span>
+                                    <span className="text-base font-semibold">参考图{publicMode ? ` (${references.length}/${publicReferenceLimit})` : ""}</span>
                                     <div className="flex gap-2">
-                                        <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
+                                        <Button size="small" icon={<ClipboardPaste className="size-3.5" />} disabled={!canAddReferences} onClick={() => void addReferencesFromClipboard()}>
                                             剪切板
                                         </Button>
-                                        <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
+                                        <Button size="small" icon={<Upload className="size-3.5" />} disabled={!canAddReferences} onClick={() => fileInputRef.current?.click()}>
                                             上传
                                         </Button>
                                     </div>
@@ -436,7 +591,7 @@ export default function ImagePage() {
 
                             <div className="flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900 sm:hidden">
                                 <span className="truncate text-stone-500 dark:text-stone-400">
-                                    {modelOptionLabel(effectiveConfig, model)} · {effectiveConfig.size} · {effectiveConfig.quality}
+                                    {publicMode ? `${effectiveConfig.size} · ${effectiveConfig.quality} · ${generationCount} 张` : `${modelOptionLabel(effectiveConfig, model)} · ${effectiveConfig.size} · ${effectiveConfig.quality}`}
                                 </span>
                                 <Button size="small" type="text" icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
                                     调整
@@ -444,7 +599,11 @@ export default function ImagePage() {
                             </div>
 
                             <div className="hidden gap-4 sm:grid sm:grid-cols-2">
-                                <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                                {publicMode ? (
+                                    <PublicGenerationSettings config={effectiveConfig} generation={publicGeneration} updateConfig={updateConfig} />
+                                ) : (
+                                    <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                                )}
                             </div>
                         </div>
 
@@ -486,7 +645,7 @@ export default function ImagePage() {
             <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/*"
+                accept={publicMode ? undefined : "image/*"}
                 multiple
                 className="hidden"
                 onChange={(event) => {
@@ -507,7 +666,11 @@ export default function ImagePage() {
             </Drawer>
             <Drawer title="参数" placement="bottom" size="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="grid grid-cols-2 gap-3 pb-4">
-                    <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                    {publicMode ? (
+                        <PublicGenerationSettings config={effectiveConfig} generation={publicGeneration} updateConfig={updateConfig} />
+                    ) : (
+                        <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                    )}
                 </div>
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
@@ -516,6 +679,27 @@ export default function ImagePage() {
                 确定删除选中的 {selectedLogIds.length} 条生成记录吗？
             </Modal>
         </div>
+    );
+}
+
+function PublicGenerationSettings({ config, generation, updateConfig }: { config: AiConfig; generation?: { counts: number[]; sizes: string[]; qualities: string[] }; updateConfig: UpdateAiConfig }) {
+    if (!generation) return <div className="col-span-2 text-sm text-stone-500 dark:text-stone-400">正在加载公众生图参数…</div>;
+
+    return (
+        <>
+            <label className="col-span-2 block min-w-0 sm:col-span-1">
+                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">画面比例</span>
+                <Select className="w-full" value={config.size} options={generation.sizes.map((value) => ({ value, label: value }))} onChange={(value) => updateConfig("size", value)} />
+            </label>
+            <label className="col-span-2 block min-w-0 sm:col-span-1">
+                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">质量</span>
+                <Select className="w-full" value={config.quality} options={generation.qualities.map((value) => ({ value, label: value }))} onChange={(value) => updateConfig("quality", value)} />
+            </label>
+            <label className="col-span-2 block min-w-0">
+                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">生成数量</span>
+                <Select className="w-full" value={String(config.count)} options={generation.counts.map((value) => ({ value: String(value), label: `${value} 张` }))} onChange={(value) => updateConfig("count", value)} />
+            </label>
+        </>
     );
 }
 
@@ -615,6 +799,35 @@ function FailedImageCard({ error, onRetry }: { error: string; onRetry: () => voi
             </div>
         </div>
     );
+}
+
+async function toGeneratedImage(result: GeneratedImageResult, durationMs: number): Promise<GeneratedImage> {
+    if (!result.image) throw new Error(publicGenerationError(result.errorCode));
+    const meta = await readImageMeta(result.image.dataUrl);
+    return {
+        id: result.image.id,
+        dataUrl: result.image.dataUrl,
+        mimeType: result.image.mimeType,
+        durationMs,
+        width: meta.width,
+        height: meta.height,
+        bytes: getDataUrlByteSize(result.image.dataUrl),
+    };
+}
+
+function publicGenerationError(errorCode?: string) {
+    const messages: Record<string, string> = {
+        QUOTA_EXHAUSTED: "今日额度已用完，明天北京时间零点恢复",
+        IP_QUOTA_EXHAUSTED: "当前网络今日试用额度已用完",
+        PUBLIC_GENERATION_OFF: "免费生图暂时关闭",
+        RATE_LIMITED: "请求过于频繁，请稍后重试",
+        INVALID_IMAGE: "参考图无法使用，请换一张图片重试",
+        REQUEST_TOO_LARGE: "参考图文件过大，请压缩后重试",
+        PROVIDER_REJECTED: "图片服务拒绝了该请求，请调整提示词后重试",
+        PROVIDER_TIMEOUT: "图片服务响应超时，请重试",
+        SERVICE_UNAVAILABLE: "图片服务暂时不可用，请稍后重试",
+    };
+    return messages[errorCode || ""] || errorCode || "生成失败";
 }
 
 function updateResultAt(results: GenerationResult[], index: number, next: Partial<GenerationResult>) {

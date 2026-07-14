@@ -1,12 +1,14 @@
 import type { Hono } from "hono";
 import type { Sql } from "postgres";
 import type { AppEnv } from "../app";
+import { GENERATION_POLICY } from "../services/image-validation";
 import { formatQuotaSnapshot, readCurrentDeviceQuota } from "../services/quota-snapshot";
 
 export type PublicSessionResponse = {
   mode: "public";
   quota: { limit: number; used: number; reserved: number; remaining: number; resetAt: string };
   generation: {
+    enabled: boolean;
     modelLabel: string;
     counts: number[];
     sizes: string[];
@@ -37,12 +39,13 @@ export function registerSessionRoutes(app: Hono<AppEnv>, sql: Sql) {
       mode: "public",
       quota,
       generation: {
+        enabled: config.publicGenerationEnabled,
         modelLabel: "免费生图模型",
-        counts: [1, 2, 3, 4],
-        sizes: ["auto", "1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"],
-        qualities: ["auto", "high", "medium", "low"],
-        maxPromptLength: 4000,
-        maxReferenceImages: 4,
+        counts: [...GENERATION_POLICY.counts],
+        sizes: [...GENERATION_POLICY.sizes],
+        qualities: [...GENERATION_POLICY.qualities],
+        maxPromptLength: GENERATION_POLICY.maxPromptLength,
+        maxReferenceImages: GENERATION_POLICY.maxReferenceImages,
       },
     };
     return context.json(response);

@@ -8,6 +8,7 @@
     "features",
     "render",
     "docker",
+    "public-deployment",
     "third-party-prompt-repositories",
     "[在线体验](https://canvas.best/)",
     "local-codex-canvas"

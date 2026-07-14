@@ -1,0 +1,45 @@
+name: infinite-canvas-public
+
+services:
+  api:
+    image: infinite-canvas-public-api:local
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    env_file:
+      - .env.public
+    expose:
+      - "3001"
+    restart: unless-stopped
+    networks:
+      - public-internal
+
+  web:
+    image: infinite-canvas-public-web:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: public-web
+      args:
+        VITE_APP_MODE: public
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${PUBLIC_WEB_PORT:?PUBLIC_WEB_PORT is required}:443"
+    volumes:
+      - type: bind
+        source: ${PUBLIC_TLS_CERT_PATH:?PUBLIC_TLS_CERT_PATH is required}
+        target: /etc/nginx/tls/origin.crt
+        read_only: true
+      - type: bind
+        source: ${PUBLIC_TLS_KEY_PATH:?PUBLIC_TLS_KEY_PATH is required}
+        target: /etc/nginx/tls/origin.key
+        read_only: true
+    restart: unless-stopped
+    networks:
+      - public-internal
+
+networks:
+  public-internal:
+    driver: bridge

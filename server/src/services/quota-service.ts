@@ -5,10 +5,10 @@ import type {
 } from "../db/quota-repository";
 import { QuotaRepositoryError } from "../db/quota-repository";
 import type {
-  PublicGenerationErrorCode,
   RequestStatus,
   SettlementErrorCode,
 } from "../domain/public-generation";
+import { PublicGenerationError } from "../domain/public-generation";
 import {
   formatQuotaSnapshot,
   getShanghaiQuotaWindow,
@@ -54,8 +54,8 @@ export type ExpirationSweepResult = {
   inconsistent: number;
 };
 
-export class QuotaServiceError extends Error {
-  constructor(readonly code: PublicGenerationErrorCode) {
+export class QuotaServiceError extends PublicGenerationError {
+  constructor(code: ConstructorParameters<typeof PublicGenerationError>[0]) {
     super(code);
     this.name = "QuotaServiceError";
   }

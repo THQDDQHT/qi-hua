@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
 import { App } from "antd";
 
+import { appCapabilities, appMode } from "@/lib/app-mode";
+import { initializePublicSession, usePublicSessionStore } from "@/stores/use-public-session-store";
 import { createModelChannel, useConfigStore } from "@/stores/use-config-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
@@ -12,7 +14,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
 
     useEffect(() => {
-        if (handledConfigParams.current) return;
+        if (!appCapabilities.channelConfig || handledConfigParams.current) return;
         const searchParams = new URLSearchParams(window.location.search);
         const baseUrl = searchParams.get("baseUrl") || searchParams.get("baseurl");
         const apiKey = searchParams.get("apiKey") || searchParams.get("apikey");
@@ -43,6 +45,16 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         openConfigDialog(false);
         message.success("已导入本地直连配置");
     }, [config.channels, message, openConfigDialog, updateConfig]);
+
+    useEffect(() => {
+        if (appMode !== "public") return;
+        void initializePublicSession();
+        const refresh = () => {
+            if (document.visibilityState === "visible") void usePublicSessionStore.getState().refreshQuota();
+        };
+        document.addEventListener("visibilitychange", refresh);
+        return () => document.removeEventListener("visibilitychange", refresh);
+    }, []);
 
     return <>{children}</>;
 }

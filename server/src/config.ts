@@ -56,21 +56,43 @@ export function loadConfig(env: Env): ServerConfig {
   const timezone = env.TIMEZONE ?? "Asia/Shanghai";
   if (timezone !== "Asia/Shanghai") throw new Error("TIMEZONE must be Asia/Shanghai");
 
+  const port = integer(env, "PORT", 3001);
+  if (port > 65535) throw new Error("PORT must be between 1 and 65535");
+
+  let aiBaseUrl: string;
+  let publicOrigin: string;
+  try {
+    aiBaseUrl = new URL(required(env, "AI_BASE_URL")).toString().replace(/\/$/, "");
+  } catch {
+    throw new Error("AI_BASE_URL must be a valid URL");
+  }
+  try {
+    publicOrigin = new URL(required(env, "PUBLIC_ORIGIN")).origin;
+  } catch {
+    throw new Error("PUBLIC_ORIGIN must be a valid origin URL");
+  }
+
+  const upstreamTimeoutMs = integer(env, "UPSTREAM_TIMEOUT_MS", 180000);
+  const reservationTtlSeconds = integer(env, "RESERVATION_TTL_SECONDS", 600);
+  if (reservationTtlSeconds * 1000 <= upstreamTimeoutMs + 5000) {
+    throw new Error("RESERVATION_TTL_SECONDS must exceed UPSTREAM_TIMEOUT_MS by at least 5 seconds");
+  }
+
   return {
-    port: integer(env, "PORT", 3001),
+    port,
     databaseUrl: required(env, "DATABASE_URL"),
-    aiBaseUrl: required(env, "AI_BASE_URL"),
+    aiBaseUrl,
     aiApiKey: required(env, "AI_API_KEY"),
     aiModel: required(env, "AI_MODEL"),
     anonTokenSecret: secret(env, "ANON_TOKEN_SECRET"),
     ipHashSecret: secret(env, "IP_HASH_SECRET"),
     idempotencySecret: secret(env, "IDEMPOTENCY_SECRET"),
-    publicOrigin: required(env, "PUBLIC_ORIGIN"),
+    publicOrigin,
     publicGenerationEnabled: boolean(env, "PUBLIC_GENERATION_ENABLED", true),
     dailyDeviceLimit: smallintLimit(env, "DAILY_DEVICE_LIMIT", 10),
     dailyIpLimit: smallintLimit(env, "DAILY_IP_LIMIT", 30),
     timezone,
-    upstreamTimeoutMs: integer(env, "UPSTREAM_TIMEOUT_MS", 180000),
-    reservationTtlSeconds: integer(env, "RESERVATION_TTL_SECONDS", 600),
+    upstreamTimeoutMs,
+    reservationTtlSeconds,
   };
 }

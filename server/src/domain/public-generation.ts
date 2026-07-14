@@ -14,6 +14,13 @@ export const PUBLIC_GENERATION_ERROR_CODES = [
 
 export type PublicGenerationErrorCode = (typeof PUBLIC_GENERATION_ERROR_CODES)[number];
 
+export class PublicGenerationError extends Error {
+  constructor(readonly code: PublicGenerationErrorCode, message: string = code) {
+    super(message);
+    this.name = "PublicGenerationError";
+  }
+}
+
 export const REQUEST_STATUSES = [
   "reserved",
   "running",

@@ -1,6 +1,8 @@
 import { FileText, ImagePlus, Images, Maximize2, Settings2, Video } from "lucide-react";
 
-export const navigationTools = [
+import { appMode, type AppMode } from "@/lib/app-mode";
+
+const allNavigationTools = [
     {
         slug: "canvas",
         label: "我的画布",
@@ -33,4 +35,10 @@ export const navigationTools = [
     },
 ] as const;
 
-export type NavigationToolSlug = (typeof navigationTools)[number]["slug"];
+export type NavigationToolSlug = (typeof allNavigationTools)[number]["slug"];
+
+export function navigationToolsFor(mode: AppMode) {
+    return mode === "public" ? allNavigationTools.filter((tool) => tool.slug !== "video" && tool.slug !== "config") : [...allNavigationTools];
+}
+
+export const navigationTools = navigationToolsFor(appMode);
