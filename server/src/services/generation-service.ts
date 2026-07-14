@@ -26,7 +26,10 @@ export type GenerationInProgressResult = {
   replayed: true;
 };
 
-type QuotaService = ReturnType<typeof createQuotaService>;
+type QuotaService = Pick<
+  ReturnType<typeof createQuotaService>,
+  "reserveQuota" | "claimForExecution" | "settleQuota"
+>;
 
 type Dependencies = {
   quotaService: QuotaService;

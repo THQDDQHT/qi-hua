@@ -147,6 +147,7 @@ describe("public anonymous session", () => {
         resetAt: expect.stringMatching(/T16:00:00\.000Z$/),
       },
       generation: {
+        enabled: true,
         modelLabel: "免费生图模型",
         counts: [1, 2, 3, 4],
         sizes: ["auto", "1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"],
@@ -305,5 +306,6 @@ describe("public anonymous session", () => {
     readSessionToken(response);
 
     expect(response.status).toBe(200);
+    expect((await response.json()).generation.enabled).toBe(false);
   });
 });
