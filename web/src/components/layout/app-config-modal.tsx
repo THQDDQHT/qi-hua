@@ -46,7 +46,7 @@ const webdavDomainLabels: Record<AppSyncDomainKey, string> = {
     "video-workbench": "视频创作台",
 };
 const codexSetupSteps = [
-    { title: "方式一：在 Codex 中使用插件", text: "先在 Codex App 安装 Infinite Canvas 插件，再通过插件启动画布，插件会自动启动本地 Canvas Agent 并带上连接信息。" },
+    { title: "方式一：在 Codex 中使用插件", text: "先在 Codex App 安装啟画插件，再通过插件启动画布，插件会自动启动本地 Canvas Agent 并带上连接信息。" },
     { title: "方式二：直接运行 Agent", text: "不使用 Codex 插件时，在终端运行下面命令，再回到网页里连接或手动填入 Local URL 和 Connect token。", command: "npx -y @basketikun/canvas-agent" },
 ];
 const codexPluginRemoveCommand = "codex plugin remove infinite-canvas";

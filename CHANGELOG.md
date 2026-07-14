@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [调整] 将 Web、PWA、文档和本地 Agent / 插件中的用户可见产品名称统一为“啟画”，保留现有存储、导出格式、MCP 和部署技术标识。
 + [新增] 新增公众生图独立双容器部署配置、Cloudflare 可信源站 Nginx 入口、迁移与安全检查脚本。
 
 + [优化] 本地 Agent 连接说明明确区分插件 / 手动 MCP 才会增加 Codex token 消耗，直接运行 Agent 不受影响。

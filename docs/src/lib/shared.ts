@@ -1,4 +1,4 @@
-export const appName = '无限画布';
+export const appName = '啟画';
 export const docsRoute = '/docs';
 export const docsContentRoute = '/llms.mdx/docs';
 

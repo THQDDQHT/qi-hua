@@ -5,6 +5,8 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+- 品牌名称：Web 浏览器标题、PWA 安装信息、顶部导航、首页、画布库、默认项目名、导出与本地备份文件名、文档站、本地 Agent 和 Codex 插件应统一显示“啟画”；同时验证旧本地数据和旧 ZIP 仍可读取，`infinite-canvas` 存储键、导出格式、MCP 命令和 Service Worker 缓存标识保持兼容。
+
 - 公众生图部署：新增独立双容器 Compose、Cloudflare 可信地址 include、Nginx 反代/限流/缓存/CSP 配置及迁移、smoke、配置和日志安全脚本；需在受 Cloudflare 严格 TLS 和源站防火墙保护的测试域名上，验证 `/health/ready`、非生图 smoke、图片接口 5r/m 限流、源站不可绕过和关闭开关止损。
 
 - 本地 Agent 连接说明：新增提醒说明只有安装 Codex 插件或手动添加 MCP 后才会增加 Codex token 消耗，直接运行 `npx -y @basketikun/canvas-agent` 不会安装 MCP；需验证文案位置清晰。

@@ -83,7 +83,7 @@ export async function createLocalBackup(): Promise<LocalBackupResult> {
 export async function downloadLocalBackup() {
     const result = await createLocalBackup();
     const date = new Date().toISOString().slice(0, 10);
-    saveAs(result.blob, `无限画布-本地备份-${date}.zip`);
+    saveAs(result.blob, `啟画-本地备份-${date}.zip`);
     return result;
 }
 

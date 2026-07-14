@@ -1,7 +1,7 @@
 {
-    "name": "无限画布",
-    "short_name": "无限画布",
-    "description": "一个无限画布创作工具",
+    "name": "啟画",
+    "short_name": "啟画",
+    "description": "啟画，一款面向图片创作的无限画布工具",
     "lang": "zh-CN",
     "start_url": "/image",
     "scope": "/",
