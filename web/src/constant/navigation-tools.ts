@@ -38,7 +38,7 @@ const allNavigationTools = [
 export type NavigationToolSlug = (typeof allNavigationTools)[number]["slug"];
 
 export function navigationToolsFor(mode: AppMode) {
-    return mode === "public" ? allNavigationTools.filter((tool) => tool.slug !== "video" && tool.slug !== "config") : [...allNavigationTools];
+    return mode === "public" ? allNavigationTools.filter((tool) => tool.slug === "image" || tool.slug === "prompts" || tool.slug === "assets") : [...allNavigationTools];
 }
 
 export const navigationTools = navigationToolsFor(appMode);

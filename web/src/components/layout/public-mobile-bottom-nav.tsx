@@ -1,4 +1,4 @@
-import { ImagePlus, Images, Maximize2 } from "lucide-react";
+import { BookOpen, ImagePlus, Images } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 
 import { appMode } from "@/lib/app-mode";
@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 
 const items = [
     { to: "/image", label: "生图", icon: ImagePlus },
-    { to: "/canvas", label: "画布", icon: Maximize2 },
+    { to: "/prompts", label: "提示词", icon: BookOpen },
     { to: "/assets", label: "素材", icon: Images },
 ] as const;
 
@@ -23,7 +23,7 @@ export function PublicMobileBottomNav() {
         >
             <div className="mx-auto grid h-16 max-w-md grid-cols-3 px-3">
                 {items.map(({ to, label, icon: Icon }) => {
-                    const active = pathname === to || (to === "/canvas" && pathname.startsWith("/canvas"));
+                    const active = pathname === to || pathname.startsWith(`${to}/`);
                     return (
                         <Link
                             key={to}

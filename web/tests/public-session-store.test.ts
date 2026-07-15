@@ -7,7 +7,7 @@ const quota = { limit: 10, used: 2, reserved: 1, remaining: 7, resetAt: "2026-07
 const session = {
     mode: "public" as const,
     quota,
-    generation: { modelLabel: "免费生图模型", counts: [1, 2, 3, 4], sizes: ["1:1"], qualities: ["auto"], maxPromptLength: 4000, maxReferenceImages: 4 },
+    generation: { modelLabel: "免费生图模型", maxPromptLength: 4000, maxReferenceImages: 4 },
 };
 
 let sessionCalls = 0;
@@ -44,5 +44,22 @@ const unavailable = createPublicSessionStore({
 assert.equal(await unavailable.getState().initialize(), null);
 assert.equal(unavailable.getState().status, "unavailable");
 assert.equal(unavailable.getState().error, "cookies blocked");
+assert.equal(unavailable.getState().issue?.message, "cookies blocked");
+
+let retryCalls = 0;
+const retried = createPublicSessionStore({
+    loadSession: async () => {
+        retryCalls += 1;
+        if (retryCalls === 1) throw new Error("temporary failure");
+        return { ...session, generation: { ...session.generation, enabled: false, disabledReason: "maintenance" } };
+    },
+    loadQuota: async () => quota,
+});
+assert.equal(await retried.getState().initialize(), null);
+assert.equal(retried.getState().status, "unavailable");
+assert.equal((await retried.getState().initialize())?.generation.enabled, false);
+assert.equal(retried.getState().status, "ready");
+assert.equal(retried.getState().error, null);
+assert.equal(retried.getState().session?.generation.disabledReason, "maintenance");
 
 console.log("public session store tests passed");

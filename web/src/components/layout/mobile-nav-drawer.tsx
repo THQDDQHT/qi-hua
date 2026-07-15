@@ -12,7 +12,7 @@ type MobileNavDrawerProps = {
 
 export function MobileNavDrawer({ open, activeToolSlug, onClose }: MobileNavDrawerProps) {
     return (
-        <Drawer title="导航" placement="left" size={280} open={open} onClose={onClose} className="md:hidden">
+        <Drawer title="导航" placement="left" size={280} open={open} onClose={onClose} rootClassName="mobile-nav-drawer md:hidden">
             <div className="space-y-1">
                 {navigationTools.map((tool) => {
                     const Icon = tool.icon;
@@ -21,6 +21,7 @@ export function MobileNavDrawer({ open, activeToolSlug, onClose }: MobileNavDraw
                         <Link
                             key={tool.slug}
                             to={`/${tool.slug}`}
+                            aria-current={active ? "page" : undefined}
                             onClick={onClose}
                             className={cn(
                                 "flex items-center gap-3 rounded-lg px-3 py-3 text-base transition",

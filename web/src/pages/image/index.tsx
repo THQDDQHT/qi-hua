@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Select, Tag, Tooltip, Typography } from "antd";
+import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Tooltip, Typography } from "antd";
 import localforage from "localforage";
 import { saveAs } from "file-saver";
 
@@ -11,6 +11,7 @@ import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/a
 import { canvasThemes } from "@/lib/canvas-theme";
 import { appMode } from "@/lib/app-mode";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
+import { normalizeImageGenerationCount } from "@/lib/image-generation-policy";
 import { generateImages, generateSingleImage, type GeneratedImageResult } from "@/services/image-generation";
 import { usePublicSessionStore } from "@/stores/use-public-session-store";
 import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
@@ -92,6 +93,7 @@ export default function ImagePage() {
     const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [autoRunToken, setAutoRunToken] = useState(0);
+    const [referenceUploads, setReferenceUploads] = useState(0);
     const imageCommand = useWorkbenchAgentStore((state) => state.imageCommand);
     const clearImageCommand = useWorkbenchAgentStore((state) => state.clearImageCommand);
     const processedCommandRef = useRef(0);
@@ -99,20 +101,18 @@ export default function ImagePage() {
     const publicSession = usePublicSessionStore((state) => state.session);
     const publicQuota = usePublicSessionStore((state) => state.quota);
     const publicSessionError = usePublicSessionStore((state) => state.error);
+    const initializePublicSession = usePublicSessionStore((state) => state.initialize);
     const applyPublicQuota = usePublicSessionStore((state) => state.applyQuota);
     const refreshPublicQuota = usePublicSessionStore((state) => state.refreshQuota);
     const publicMode = appMode === "public";
     const publicGeneration = publicSession?.generation;
     const model = effectiveConfig.imageModel || effectiveConfig.model;
-    const generationCount = publicMode ? Number(config.count) : Math.max(1, Math.min(10, Number(config.count) || 1));
+    const generationCount = normalizeImageGenerationCount(config.count);
     const publicOptionsReady = !publicMode || Boolean(publicGeneration && publicSessionStatus === "ready");
     const publicOptionsValid =
         !publicMode ||
         Boolean(
             publicGeneration &&
-            publicGeneration.counts.includes(generationCount) &&
-            publicGeneration.sizes.includes(effectiveConfig.size) &&
-            publicGeneration.qualities.includes(effectiveConfig.quality) &&
             prompt.trim().length <= publicGeneration.maxPromptLength &&
             references.length <= publicGeneration.maxReferenceImages,
         );
@@ -132,16 +132,30 @@ export default function ImagePage() {
         void refreshLogs();
     }, []);
 
-    useEffect(() => {
-        if (!publicMode || !publicGeneration) return;
-        if (!publicGeneration.counts.includes(Number(config.count))) updateConfig("count", String(publicGeneration.counts[0] ?? 1));
-        if (!publicGeneration.sizes.includes(effectiveConfig.size)) updateConfig("size", publicGeneration.sizes[0] ?? "auto");
-        if (!publicGeneration.qualities.includes(effectiveConfig.quality)) updateConfig("quality", publicGeneration.qualities[0] ?? "auto");
-    }, [config.count, effectiveConfig.quality, effectiveConfig.size, publicGeneration, publicMode, updateConfig]);
-
     const publicReferenceLimit = publicGeneration?.maxReferenceImages ?? 4;
     const remainingReferenceSlots = publicMode ? Math.max(0, publicReferenceLimit - references.length) : Number.POSITIVE_INFINITY;
     const canAddReferences = remainingReferenceSlots > 0;
+    const uploadingReferences = referenceUploads > 0;
+
+    const uploadReferenceFiles = async (files: Array<{ blob: Blob; name: string }>) => {
+        setReferenceUploads((value) => value + 1);
+        try {
+            const settled = await Promise.allSettled(
+                files.map(async ({ blob, name }) => {
+                    const image = await uploadImage(blob);
+                    return { id: nanoid(), name, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
+                }),
+            );
+            const nextReferences = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+            const failures = settled.flatMap((result, index) => (result.status === "rejected" ? [{ name: files[index].name, reason: result.reason instanceof Error ? result.reason.message : "上传失败" }] : []));
+            if (nextReferences.length) setReferences((value) => [...value, ...nextReferences]);
+            if (failures.length) message.warning(`成功添加 ${nextReferences.length} 张，失败 ${failures.length} 张：${failures.slice(0, 2).map((item) => `${item.name}（${item.reason}）`).join("；")}`);
+            else if (nextReferences.length) message.success(`已添加 ${nextReferences.length} 张参考图`);
+            return nextReferences.length;
+        } finally {
+            setReferenceUploads((value) => Math.max(0, value - 1));
+        }
+    };
 
     const addReferences = async (files?: FileList | null) => {
         const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/") || (publicMode && !file.type));
@@ -154,14 +168,8 @@ export default function ImagePage() {
             return;
         }
         const acceptedFiles = imageFiles.slice(0, remainingReferenceSlots);
-        const nextReferences = await Promise.all(
-            acceptedFiles.map(async (file) => {
-                const image = await uploadImage(file);
-                return { id: nanoid(), name: file.name, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
-            }),
-        );
-        setReferences((value) => [...value, ...nextReferences]);
-        if (acceptedFiles.length < imageFiles.length) message.warning(`仅添加前 ${acceptedFiles.length} 张参考图，公众模式最多 ${publicReferenceLimit} 张`);
+        await uploadReferenceFiles(acceptedFiles.map((file) => ({ blob: file, name: file.name })));
+        if (acceptedFiles.length < imageFiles.length) message.warning(`仅处理前 ${acceptedFiles.length} 张参考图，公众模式最多 ${publicReferenceLimit} 张`);
     };
 
     const addReferencesFromClipboard = async () => {
@@ -178,17 +186,10 @@ export default function ImagePage() {
                 return;
             }
             const acceptedBlobs = blobs.slice(0, remainingReferenceSlots);
-            const nextReferences = await Promise.all(
-                acceptedBlobs.map(async (blob, index) => {
-                    const image = await uploadImage(blob);
-                    return { id: nanoid(), name: `clipboard-${index + 1}.png`, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
-                }),
-            );
-            setReferences((value) => [...value, ...nextReferences]);
-            message.success(`已读取 ${nextReferences.length} 张参考图`);
+            await uploadReferenceFiles(acceptedBlobs.map((blob, index) => ({ blob, name: `clipboard-${index + 1}.png` })));
             if (acceptedBlobs.length < blobs.length) message.warning(`公众模式最多添加 ${publicReferenceLimit} 张参考图`);
-        } catch {
-            message.error("剪切板里没有可读取的图片");
+        } catch (error) {
+            message.error(error instanceof Error ? `无法读取剪切板：${error.message}` : "剪切板里没有可读取的图片");
         }
     };
 
@@ -375,7 +376,7 @@ export default function ImagePage() {
         if (!publicMode && (log.config.imageModel || log.model)) updateConfig("imageModel", log.config.imageModel || log.model);
         if (log.config.quality) updateConfig("quality", log.config.quality);
         if (log.config.size) updateConfig("size", log.config.size);
-        if (log.config.count) updateConfig("count", log.config.count);
+        if (log.config.count) updateConfig("count", String(normalizeImageGenerationCount(log.config.count)));
         setResults(log.images.map((image) => ({ id: image.id, status: "success", image })));
     };
 
@@ -396,10 +397,6 @@ export default function ImagePage() {
             }
             if (references.length > publicGeneration.maxReferenceImages) {
                 message.warning(`公众模式最多使用 ${publicGeneration.maxReferenceImages} 张参考图`);
-                return null;
-            }
-            if (!publicGeneration.counts.includes(requestedCount) || !publicGeneration.sizes.includes(effectiveConfig.size) || !publicGeneration.qualities.includes(effectiveConfig.quality)) {
-                message.warning("请选择服务支持的生成参数");
                 return null;
             }
             if (!publicQuota || publicQuota.remaining < requestedCount) {
@@ -525,7 +522,7 @@ export default function ImagePage() {
                         <div className="mt-6 space-y-5">
                             <div>
                                 <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">提示词</span>
+                                    <label htmlFor="image-generation-prompt" className="text-base font-semibold">提示词</label>
                                     <div className="flex gap-2">
                                         <Button size="small" icon={<BookOpen className="size-3.5" />} onClick={() => setPromptDialogOpen(true)}>
                                             查看提示词库
@@ -535,17 +532,32 @@ export default function ImagePage() {
                                         </Button>
                                     </div>
                                 </div>
-                                <Input.TextArea value={prompt} maxLength={publicGeneration?.maxPromptLength} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder="描述画面主体、风格、构图、光线和用途" />
+                                <Input.TextArea id="image-generation-prompt" className="text-base sm:text-sm" value={prompt} maxLength={publicGeneration?.maxPromptLength} aria-describedby={publicMode ? "image-generation-status" : undefined} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder="描述画面主体、风格、构图、光线和用途" />
                                 {publicMode ? (
-                                    <div className="mt-2 space-y-1 text-sm text-stone-500 dark:text-stone-400" aria-live="polite">
+                                    <div id="image-generation-status" role="status" className="mt-2 space-y-1 text-sm text-stone-500 dark:text-stone-400" aria-live="polite" aria-atomic="true">
                                         {publicQuota ? (
                                             <div>
                                                 今日可生成 {publicQuota.remaining}/{publicQuota.limit} 张
                                             </div>
                                         ) : null}
-                                        {publicGeneration ? <div>提示词最多 {publicGeneration.maxPromptLength} 个字符</div> : null}
                                         {publicSessionStatus === "loading" || publicSessionStatus === "idle" ? <div>正在初始化公众生图会话…</div> : null}
-                                        {publicSessionStatus === "unavailable" ? <div className="text-red-600 dark:text-red-300">{publicSessionError || "公众生图会话不可用，请稍后重试"}</div> : null}
+                                        {publicSessionStatus === "unavailable" ? (
+                                            <div className="flex flex-wrap items-center gap-2 text-red-600 dark:text-red-300">
+                                                <span>{publicSessionError || "公众生图会话不可用，请稍后重试"}</span>
+                                                <Button size="small" onClick={() => void initializePublicSession()}>
+                                                    重试
+                                                </Button>
+                                            </div>
+                                        ) : null}
+                                        {publicSessionStatus === "ready" && publicGeneration?.enabled === false ? (
+                                            <div className="flex flex-wrap items-center gap-2 text-amber-700 dark:text-amber-300">
+                                                <span>{publicGeneration.disabledReason || "免费生图暂时关闭，请稍后再试"}</span>
+                                                <Button size="small" onClick={() => void initializePublicSession()}>
+                                                    重新检查
+                                                </Button>
+                                            </div>
+                                        ) : null}
+                                        {publicSessionStatus === "ready" && publicQuota && publicQuota.remaining < generationCount ? <div className="text-amber-700 dark:text-amber-300">剩余 {publicQuota.remaining} 张，本次需要 {generationCount} 张，请调整生成数量。</div> : null}
                                     </div>
                                 ) : null}
                             </div>
@@ -554,10 +566,10 @@ export default function ImagePage() {
                                 <div className="mb-2 flex items-center justify-between gap-3">
                                     <span className="text-base font-semibold">参考图{publicMode ? ` (${references.length}/${publicReferenceLimit})` : ""}</span>
                                     <div className="flex gap-2">
-                                        <Button size="small" icon={<ClipboardPaste className="size-3.5" />} disabled={!canAddReferences} onClick={() => void addReferencesFromClipboard()}>
+                                        <Button size="small" icon={<ClipboardPaste className="size-3.5" />} loading={uploadingReferences} disabled={!canAddReferences || uploadingReferences} onClick={() => void addReferencesFromClipboard()}>
                                             剪切板
                                         </Button>
-                                        <Button size="small" icon={<Upload className="size-3.5" />} disabled={!canAddReferences} onClick={() => fileInputRef.current?.click()}>
+                                        <Button size="small" icon={<Upload className="size-3.5" />} loading={uploadingReferences} disabled={!canAddReferences || uploadingReferences} onClick={() => fileInputRef.current?.click()}>
                                             上传
                                         </Button>
                                     </div>
@@ -571,17 +583,15 @@ export default function ImagePage() {
                                     }}
                                 >
                                     {references.map((item, index) => (
-                                        <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
-                                            <img src={item.dataUrl} alt={item.name} className="size-full object-cover" />
-                                            <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{imageReferenceLabel(index)}</span>
-                                            <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
-                                            <button
-                                                type="button"
-                                                className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex"
-                                                onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))}
-                                                aria-label="移除参考图"
-                                            >
+                                        <div key={item.id} className="relative w-28 shrink-0 overflow-hidden rounded-md border border-stone-200 bg-white dark:border-stone-800 dark:bg-stone-950">
+                                            <div className="relative h-20">
+                                                <img src={item.dataUrl} alt={item.name} className="size-full object-cover" />
+                                                <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{imageReferenceLabel(index)}</span>
+                                            </div>
+                                            <ReferenceOrderButtons index={index} total={references.length} label={imageReferenceLabel(index)} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
+                                            <button type="button" className="flex min-h-11 w-full items-center justify-center gap-1 border-t border-stone-200 text-xs text-red-600 dark:border-stone-800 dark:text-red-300" onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label={`移除${imageReferenceLabel(index)}`}>
                                                 <Trash2 className="size-3.5" />
+                                                移除
                                             </button>
                                         </div>
                                     ))}
@@ -600,7 +610,7 @@ export default function ImagePage() {
 
                             <div className="hidden gap-4 sm:grid sm:grid-cols-2">
                                 {publicMode ? (
-                                    <PublicGenerationSettings config={effectiveConfig} generation={publicGeneration} updateConfig={updateConfig} />
+                                    <PublicGenerationSettings config={effectiveConfig} updateConfig={updateConfig} />
                                 ) : (
                                     <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
                                 )}
@@ -645,7 +655,7 @@ export default function ImagePage() {
             <input
                 ref={fileInputRef}
                 type="file"
-                accept={publicMode ? undefined : "image/*"}
+                accept="image/jpeg,image/png,image/webp"
                 multiple
                 className="hidden"
                 onChange={(event) => {
@@ -653,7 +663,7 @@ export default function ImagePage() {
                     event.target.value = "";
                 }}
             />
-            <Drawer title="生成记录" placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
+            <Drawer title="生成记录" placement="bottom" height="min(82dvh, 736px)" rootClassName="mobile-bottom-drawer" open={logsOpen} onClose={() => setLogsOpen(false)}>
                 <LogPanel
                     logs={logs}
                     selectedLogIds={selectedLogIds}
@@ -664,10 +674,10 @@ export default function ImagePage() {
                     onPreviewLog={(log) => void previewGenerationLog(log)}
                 />
             </Drawer>
-            <Drawer title="参数" placement="bottom" size="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+            <Drawer title="参数" placement="bottom" height="82dvh" rootClassName="mobile-bottom-drawer" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="grid grid-cols-2 gap-3 pb-4">
                     {publicMode ? (
-                        <PublicGenerationSettings config={effectiveConfig} generation={publicGeneration} updateConfig={updateConfig} />
+                        <PublicGenerationSettings config={effectiveConfig} updateConfig={updateConfig} />
                     ) : (
                         <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
                     )}
@@ -682,24 +692,18 @@ export default function ImagePage() {
     );
 }
 
-function PublicGenerationSettings({ config, generation, updateConfig }: { config: AiConfig; generation?: { counts: number[]; sizes: string[]; qualities: string[] }; updateConfig: UpdateAiConfig }) {
-    if (!generation) return <div className="col-span-2 text-sm text-stone-500 dark:text-stone-400">正在加载公众生图参数…</div>;
+function PublicGenerationSettings({ config, updateConfig }: { config: AiConfig; updateConfig: UpdateAiConfig }) {
+    const theme = canvasThemes[useThemeStore((state) => state.theme)];
 
     return (
-        <>
-            <label className="col-span-2 block min-w-0 sm:col-span-1">
-                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">画面比例</span>
-                <Select className="w-full" value={config.size} options={generation.sizes.map((value) => ({ value, label: value }))} onChange={(value) => updateConfig("size", value)} />
-            </label>
-            <label className="col-span-2 block min-w-0 sm:col-span-1">
-                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">质量</span>
-                <Select className="w-full" value={config.quality} options={generation.qualities.map((value) => ({ value, label: value }))} onChange={(value) => updateConfig("quality", value)} />
-            </label>
-            <label className="col-span-2 block min-w-0">
-                <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">生成数量</span>
-                <Select className="w-full" value={String(config.count)} options={generation.counts.map((value) => ({ value: String(value), label: `${value} 张` }))} onChange={(value) => updateConfig("count", value)} />
-            </label>
-        </>
+        <div className="col-span-2">
+            <ImageSettingsPanel
+                config={config}
+                onConfigChange={(key, value) => updateConfig(key, value)}
+                theme={theme}
+                showTitle={false}
+                className="space-y-4"            />
+        </div>
     );
 }
 
@@ -713,7 +717,7 @@ function GenerationSettings({ config, model, updateConfig, openConfigDialog }: {
                 <ModelPicker config={config} value={model} onChange={(value) => updateConfig("imageModel", value)} capability="image" fullWidth onMissingConfig={() => openConfigDialog(false)} />
             </label>
             <div className="col-span-2">
-                <ImageSettingsPanel config={config} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" maxCount={10} />
+                <ImageSettingsPanel config={config} onConfigChange={(key, value) => updateConfig(key, value)} theme={theme} showTitle={false} className="space-y-4" />
             </div>
         </>
     );
@@ -1015,12 +1019,12 @@ function moveListItem<T>(items: T[], index: number, offset: number) {
     return next;
 }
 
-function ReferenceOrderButtons({ index, total, onMove }: { index: number; total: number; onMove: (offset: number) => void }) {
+function ReferenceOrderButtons({ index, total, label, onMove }: { index: number; total: number; label: string; onMove: (offset: number) => void }) {
     if (total <= 1) return null;
     return (
-        <div className="absolute inset-x-1 bottom-1 flex justify-between">
-            <Button size="small" className="!h-6 !w-6 !min-w-6 !rounded-full !bg-white/85 !p-0 !shadow-sm" icon={<ArrowLeft className="size-3" />} disabled={index <= 0} onClick={() => onMove(-1)} />
-            <Button size="small" className="!h-6 !w-6 !min-w-6 !rounded-full !bg-white/85 !p-0 !shadow-sm" icon={<ArrowRight className="size-3" />} disabled={index >= total - 1} onClick={() => onMove(1)} />
+        <div className="grid grid-cols-2 border-t border-stone-200 dark:border-stone-800">
+            <Button type="text" className="!min-h-11 !rounded-none" aria-label={`将${label}向前移动`} icon={<ArrowLeft className="size-4" />} disabled={index <= 0} onClick={() => onMove(-1)} />
+            <Button type="text" className="!min-h-11 !rounded-none border-l border-stone-200 dark:border-stone-800" aria-label={`将${label}向后移动`} icon={<ArrowRight className="size-4" />} disabled={index >= total - 1} onClick={() => onMove(1)} />
         </div>
     );
 }

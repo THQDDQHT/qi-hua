@@ -9,10 +9,8 @@ export type PublicSessionResponse = {
   quota: { limit: number; used: number; reserved: number; remaining: number; resetAt: string };
   generation: {
     enabled: boolean;
+    disabledReason?: string;
     modelLabel: string;
-    counts: number[];
-    sizes: string[];
-    qualities: string[];
     maxPromptLength: number;
     maxReferenceImages: number;
   };
@@ -40,10 +38,8 @@ export function registerSessionRoutes(app: Hono<AppEnv>, sql: Sql) {
       quota,
       generation: {
         enabled: config.publicGenerationEnabled,
+        ...(!config.publicGenerationEnabled ? { disabledReason: "免费生图当前由服务端暂停，请稍后重试。" } : {}),
         modelLabel: "免费生图模型",
-        counts: [...GENERATION_POLICY.counts],
-        sizes: [...GENERATION_POLICY.sizes],
-        qualities: [...GENERATION_POLICY.qualities],
         maxPromptLength: GENERATION_POLICY.maxPromptLength,
         maxReferenceImages: GENERATION_POLICY.maxReferenceImages,
       },

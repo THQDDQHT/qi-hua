@@ -149,9 +149,6 @@ describe("public anonymous session", () => {
       generation: {
         enabled: true,
         modelLabel: "免费生图模型",
-        counts: [1, 2, 3, 4],
-        sizes: ["auto", "1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"],
-        qualities: ["auto", "high", "medium", "low"],
         maxPromptLength: 4000,
         maxReferenceImages: 4,
       },

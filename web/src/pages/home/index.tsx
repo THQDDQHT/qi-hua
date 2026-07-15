@@ -1,24 +1,12 @@
 import { ArrowRight } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { App, Button, Image, Tag } from "antd";
 import { useNavigate } from "react-router-dom";
 
 import { fetchPrompts, type Prompt } from "@/services/api/prompts";
 import { navigationTools } from "@/constant/navigation-tools";
+import { appCapabilities } from "@/lib/app-mode";
 import { cn } from "@/lib/utils";
-
-function Highlighter({ action, color, children }: { action: "highlight" | "underline"; color: string; children: ReactNode }) {
-    return (
-        <span className="relative inline-block px-1">
-            {action === "highlight" ? (
-                <span className="absolute inset-x-0 bottom-0 top-1 rounded-sm opacity-45" style={{ backgroundColor: color }} />
-            ) : (
-                <span className="absolute inset-x-0 bottom-0 h-1 rounded-full opacity-80" style={{ backgroundColor: color }} />
-            )}
-            <span className="relative font-medium text-stone-800 dark:text-stone-200">{children}</span>
-        </span>
-    );
-}
 
 export default function IndexPage() {
     const { message } = App.useApp();
@@ -42,24 +30,16 @@ export default function IndexPage() {
 
                 <div className="relative flex min-h-[620px] flex-col items-center justify-center pt-10 text-center">
                     <h1 className="ai-title-aurora max-w-5xl text-balance text-5xl font-semibold tracking-normal sm:text-7xl lg:text-8xl">啟画</h1>
-                    <p className="mt-8 max-w-3xl text-balance text-lg leading-8 text-stone-500 dark:text-stone-400">
-                        在
-                        <Highlighter action="underline" color="#FF9800">
-                            啟画
-                        </Highlighter>
-                        中生成、连接和重组
-                        <Highlighter action="highlight" color="#87CEFA">
-                            图片、文字与图形
-                        </Highlighter>
-                        ，让创作从单次生成变成连续推演。
-                    </p>
+                    <p className="mt-8 max-w-3xl text-balance text-lg leading-8 text-stone-500 dark:text-stone-400">让创意即刻成画。</p>
                     <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
                         <Button type="primary" size="large" onClick={() => navigate(`/${primaryTool.slug}`)} icon={<ArrowRight className="size-4" />} iconPlacement="end">
                             开始使用
                         </Button>
-                        <Button size="large" onClick={() => navigate("/canvas")}>
-                            打开画布
-                        </Button>
+                        {appCapabilities.canvas ? (
+                            <Button size="large" onClick={() => navigate("/canvas")}>
+                                打开画布
+                            </Button>
+                        ) : null}
                     </div>
                 </div>
 

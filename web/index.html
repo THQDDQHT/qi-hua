@@ -2,7 +2,7 @@
 <html lang="zh-CN" class="font-sans">
     <head>
         <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
         <meta name="description" content="啟画，一款面向图片创作的无限画布工具" />
         <meta name="theme-color" content="#171717" />
         <link rel="icon" href="/logo.svg" />
@@ -12,7 +12,7 @@
         <script>
             try {
                 var s = JSON.parse(localStorage.getItem("infinite-canvas:theme_store") || "{}");
-                var t = s.state && s.state.theme === "light" ? "light" : "dark";
+                var t = s.state && s.state.theme === "dark" ? "dark" : "light";
                 document.documentElement.classList.toggle("dark", t === "dark");
                 document.documentElement.style.colorScheme = t;
             } catch (e) {}

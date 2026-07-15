@@ -3,6 +3,8 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
+import { normalizeImageGenerationCount } from "@/lib/image-generation-policy";
+
 export type ApiCallFormat = "openai" | "gemini";
 
 export type ModelChannel = {
@@ -95,7 +97,7 @@ export const defaultConfig: AiConfig = {
     textModels: ["default::gpt-5.5"],
     audioModels: ["default::gpt-4o-mini-tts"],
     quality: "auto",
-    size: "1:1",
+    size: "auto",
     count: "1",
     canvasImageCount: "3",
 };
@@ -179,7 +181,7 @@ export const useConfigStore = create<ConfigStore>()(
                 set((state) => ({
                     config: {
                         ...state.config,
-                        [key]: value,
+                        [key]: key === "count" ? String(normalizeImageGenerationCount(value, 1)) : key === "canvasImageCount" ? String(normalizeImageGenerationCount(value, 3)) : value,
                     },
                 })),
             updateWebdavConfig: (key, value) =>
@@ -226,7 +228,8 @@ export const useConfigStore = create<ConfigStore>()(
                         vquality: config.vquality || "720",
                         videoGenerateAudio: config.videoGenerateAudio || "true",
                         videoWatermark: config.videoWatermark || "false",
-                        canvasImageCount: config.canvasImageCount || "3",
+                        count: String(normalizeImageGenerationCount(config.count, 1)),
+                        canvasImageCount: String(normalizeImageGenerationCount(config.canvasImageCount, 3)),
                         imageModels: Array.isArray(persistedConfig.imageModels) ? normalizeModelList(config.imageModels, channels) : filterModelsByCapability(models, "image"),
                         videoModels: Array.isArray(persistedConfig.videoModels) ? normalizeModelList(config.videoModels, channels) : filterModelsByCapability(models, "video"),
                         textModels: Array.isArray(persistedConfig.textModels) ? normalizeModelList(config.textModels, channels) : filterModelsByCapability(models, "text"),

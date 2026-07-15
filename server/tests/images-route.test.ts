@@ -132,6 +132,18 @@ describe("图片路由", () => {
     expect(await response.json()).toEqual({ status: "running", replayed: true });
   });
 
+  test("自定义尺寸和四张批次可进入生成服务", async () => {
+    const { app, calls } = createRouteApp();
+    const response = await app.request("/api/images/generations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(generationBody({ count: 4, size: "1600x912", quality: "low" })),
+    });
+
+    expect(response.status).toBe(200);
+    expect(calls[0]?.generation).toMatchObject({ count: 4, size: "1600x912", quality: "low" });
+  });
+
   test.each([
     ["not-json", "application/json"],
     [JSON.stringify(generationBody({ prompt: "   " })), "application/json"],
@@ -146,6 +158,18 @@ describe("图片路由", () => {
     });
 
     expect(response.status).toBe(400);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("multipart 非法 count 不调用服务", async () => {
+    const form = new FormData();
+    Object.entries(generationBody({ count: 5 })).forEach(([key, value]) => form.set(key, String(value)));
+    const { app, calls } = createRouteApp();
+
+    const response = await app.request("/api/images/edits", { method: "POST", body: form });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
     expect(calls).toHaveLength(0);
   });
 

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { createBrowserRouter, Navigate, Outlet, type RouteObject } from "react-router-dom";
 
 import UserLayout from "@/layouts/user-layout";
@@ -24,6 +25,19 @@ const routeElements: Record<AppRouteId, React.ReactNode> = {
     config: <ConfigPage />,
 };
 
+function PublicHomeRoute() {
+    const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 767px)").matches);
+
+    useEffect(() => {
+        const media = window.matchMedia("(max-width: 767px)");
+        const update = () => setMobile(media.matches);
+        media.addEventListener("change", update);
+        return () => media.removeEventListener("change", update);
+    }, []);
+
+    return mobile ? <Navigate to="/image" replace /> : <HomePage />;
+}
+
 export function routeObjectsFor(mode: AppMode): RouteObject[] {
     return [
         {
@@ -34,7 +48,7 @@ export function routeObjectsFor(mode: AppMode): RouteObject[] {
             ),
             children: routesFor(mode).map((route) => ({
                 path: route.path,
-                element: route.id === "home" && mode === "public" ? <Navigate to="/image" replace /> : routeElements[route.id],
+                element: route.id === "home" && mode === "public" ? <PublicHomeRoute /> : routeElements[route.id],
             })),
         },
         { path: "*", element: <NotFound /> },

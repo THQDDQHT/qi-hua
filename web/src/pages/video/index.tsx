@@ -95,6 +95,7 @@ export default function VideoPage() {
     const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [autoRunToken, setAutoRunToken] = useState(0);
+    const [referenceUploads, setReferenceUploads] = useState(0);
     const videoCommand = useWorkbenchAgentStore((state) => state.videoCommand);
     const clearVideoCommand = useWorkbenchAgentStore((state) => state.clearVideoCommand);
     const processedCommandRef = useRef(0);
@@ -122,34 +123,39 @@ export default function VideoPage() {
         if (selectedFiles.some((file) => file.type.startsWith("image/") && file.size > SEEDANCE_REFERENCE_LIMITS.imageMaxBytes)) message.warning("已忽略超过 30MB 的参考图");
         if (selectedFiles.some((file) => file.type.startsWith("video/") && file.size > SEEDANCE_REFERENCE_LIMITS.videoMaxBytes)) message.warning("已忽略超过 50MB 的参考视频");
         if (selectedFiles.some((file) => isSupportedAudioFile(file) && file.size > SEEDANCE_REFERENCE_LIMITS.audioMaxBytes)) message.warning("已忽略超过 15MB 的参考音频");
-        const nextReferences = await Promise.all(
-            imageFiles.map(async (file) => {
-                const image = await uploadImage(file);
-                return { id: nanoid(), name: file.name, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
-            }),
-        );
-        const nextVideoReferences = await Promise.all(
-            videoFiles.map(async (file) => {
-                const video = await uploadMediaFile(file, "video-reference");
-                return { id: nanoid(), name: file.name, type: video.mimeType, url: video.url, storageKey: video.storageKey, bytes: video.bytes, width: video.width, height: video.height, durationMs: video.durationMs };
-            }),
-        );
-        const nextAudioReferences = filterAudioReferencesByDuration(
-            audioReferences,
-            await Promise.all(
-                audioFiles.map(async (file) => {
+        setReferenceUploads((value) => value + 1);
+        try {
+            const [imageResults, videoResults, audioResults] = await Promise.all([
+                Promise.allSettled(imageFiles.map(async (file) => {
+                    const image = await uploadImage(file);
+                    return { id: nanoid(), name: file.name, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
+                })),
+                Promise.allSettled(videoFiles.map(async (file) => {
+                    const video = await uploadMediaFile(file, "video-reference");
+                    return { id: nanoid(), name: file.name, type: video.mimeType, url: video.url, storageKey: video.storageKey, bytes: video.bytes, width: video.width, height: video.height, durationMs: video.durationMs };
+                })),
+                Promise.allSettled(audioFiles.map(async (file) => {
                     const audio = await uploadMediaFile(file, "audio-reference");
                     return { id: nanoid(), name: file.name, type: audio.mimeType, url: audio.url, storageKey: audio.storageKey, durationMs: audio.durationMs };
-                }),
-            ),
-            message.warning,
-        );
-        setReferences((value) => [...value, ...nextReferences].slice(0, SEEDANCE_REFERENCE_LIMITS.images));
-        setVideoReferences((value) => [...value, ...nextVideoReferences].slice(0, SEEDANCE_REFERENCE_LIMITS.videos));
-        setAudioReferences((value) => [...value, ...nextAudioReferences].slice(0, SEEDANCE_REFERENCE_LIMITS.audios));
+                })),
+            ]);
+            const nextReferences = fulfilledValues(imageResults);
+            const nextVideoReferences = fulfilledValues(videoResults);
+            const nextAudioReferences = filterAudioReferencesByDuration(audioReferences, fulfilledValues(audioResults), message.warning);
+            setReferences((value) => [...value, ...nextReferences].slice(0, SEEDANCE_REFERENCE_LIMITS.images));
+            setVideoReferences((value) => [...value, ...nextVideoReferences].slice(0, SEEDANCE_REFERENCE_LIMITS.videos));
+            setAudioReferences((value) => [...value, ...nextAudioReferences].slice(0, SEEDANCE_REFERENCE_LIMITS.audios));
+            const failures = [...imageResults, ...videoResults, ...audioResults].filter((result) => result.status === "rejected").length;
+            if (failures) message.warning(`参考素材成功添加 ${nextReferences.length + nextVideoReferences.length + nextAudioReferences.length} 个，失败 ${failures} 个`);
+        } finally {
+            setReferenceUploads((value) => Math.max(0, value - 1));
+        }
     };
 
+    const uploadingReferences = referenceUploads > 0;
+
     const addReferencesFromClipboard = async () => {
+        setReferenceUploads((value) => value + 1);
         try {
             const items = await navigator.clipboard.read();
             const blobs = await Promise.all(items.flatMap((item) => item.types.filter((type) => type.startsWith("image/")).map((type) => item.getType(type))));
@@ -157,16 +163,21 @@ export default function VideoPage() {
                 message.error("剪切板里没有可读取的图片");
                 return;
             }
-            const nextReferences = await Promise.all(
+            const results = await Promise.allSettled(
                 blobs.slice(0, SEEDANCE_REFERENCE_LIMITS.images - references.length).map(async (blob, index) => {
                     const image = await uploadImage(blob);
                     return { id: nanoid(), name: `clipboard-${index + 1}.png`, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
                 }),
             );
+            const nextReferences = fulfilledValues(results);
             setReferences((value) => [...value, ...nextReferences].slice(0, SEEDANCE_REFERENCE_LIMITS.images));
-            message.success(`已读取 ${nextReferences.length} 张参考图`);
-        } catch {
-            message.error("剪切板里没有可读取的图片");
+            const failures = results.length - nextReferences.length;
+            if (failures) message.warning(`已读取 ${nextReferences.length} 张参考图，失败 ${failures} 张`);
+            else message.success(`已读取 ${nextReferences.length} 张参考图`);
+        } catch (error) {
+            message.error(error instanceof Error ? `无法读取剪切板：${error.message}` : "剪切板里没有可读取的图片");
+        } finally {
+            setReferenceUploads((value) => Math.max(0, value - 1));
         }
     };
     const generate = async () => {
@@ -388,7 +399,7 @@ export default function VideoPage() {
                         <div className="mt-6 space-y-5">
                             <div>
                                 <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">提示词</span>
+                                    <label htmlFor="video-generation-prompt" className="text-base font-semibold">提示词</label>
                                     <div className="flex gap-2">
                                         <Button size="small" icon={<BookOpen className="size-3.5" />} onClick={() => setPromptDialogOpen(true)}>
                                             查看提示词库
@@ -398,17 +409,17 @@ export default function VideoPage() {
                                         </Button>
                                     </div>
                                 </div>
-                                <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder="描述镜头运动、主体动作、场景氛围和画面风格" />
+                                <Input.TextArea id="video-generation-prompt" className="text-base sm:text-sm" value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder="描述镜头运动、主体动作、场景氛围和画面风格" />
                             </div>
 
                             <div className="min-w-0">
                                 <div className="mb-2 flex items-center justify-between gap-3">
                                     <span className="text-base font-semibold">参考图</span>
                                     <div className="flex gap-2">
-                                        <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
+                                        <Button size="small" icon={<ClipboardPaste className="size-3.5" />} loading={uploadingReferences} disabled={uploadingReferences} onClick={() => void addReferencesFromClipboard()}>
                                             剪切板
                                         </Button>
-                                        <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
+                                        <Button size="small" icon={<Upload className="size-3.5" />} loading={uploadingReferences} disabled={uploadingReferences} onClick={() => fileInputRef.current?.click()}>
                                             上传
                                         </Button>
                                     </div>
@@ -418,8 +429,8 @@ export default function VideoPage() {
                                         <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
                                             <img src={item.dataUrl} alt={item.name} className="size-full object-cover" />
                                             <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{seedanceReferenceLabel("image", index)}</span>
-                                            <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
-                                            <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label="移除参考图">
+                                            <ReferenceOrderButtons index={index} total={references.length} label={seedanceReferenceLabel("image", index)} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
+                                            <button type="button" className="absolute right-1 top-1 flex min-h-11 min-w-11 items-center justify-center rounded bg-black/60 text-white" onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label="移除参考图">
                                                 <Trash2 className="size-3.5" />
                                             </button>
                                         </div>
@@ -431,7 +442,7 @@ export default function VideoPage() {
                             <div className="min-w-0">
                                 <div className="mb-2 flex items-center justify-between gap-3">
                                     <span className="text-base font-semibold">参考视频</span>
-                                    <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
+                                    <Button size="small" icon={<Upload className="size-3.5" />} loading={uploadingReferences} disabled={uploadingReferences} onClick={() => fileInputRef.current?.click()}>
                                         上传
                                     </Button>
                                 </div>
@@ -440,8 +451,8 @@ export default function VideoPage() {
                                         <div key={item.id} className="group relative h-20 w-32 shrink-0 overflow-hidden rounded-md border border-stone-200 bg-black dark:border-stone-800">
                                             <video src={item.url} className="size-full object-cover" muted preload="metadata" />
                                             <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{seedanceReferenceLabel("video", index)}</span>
-                                            <ReferenceOrderButtons index={index} total={videoReferences.length} onMove={(offset) => setVideoReferences((value) => moveListItem(value, index, offset))} />
-                                            <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setVideoReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label="移除参考视频">
+                                            <ReferenceOrderButtons index={index} total={videoReferences.length} label={seedanceReferenceLabel("video", index)} onMove={(offset) => setVideoReferences((value) => moveListItem(value, index, offset))} />
+                                            <button type="button" className="absolute right-1 top-1 flex min-h-11 min-w-11 items-center justify-center rounded bg-black/60 text-white" onClick={() => setVideoReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label="移除参考视频">
                                                 <Trash2 className="size-3.5" />
                                             </button>
                                         </div>
@@ -453,7 +464,7 @@ export default function VideoPage() {
                             <div className="min-w-0">
                                 <div className="mb-2 flex items-center justify-between gap-3">
                                     <span className="text-base font-semibold">参考音频</span>
-                                    <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
+                                    <Button size="small" icon={<Upload className="size-3.5" />} loading={uploadingReferences} disabled={uploadingReferences} onClick={() => fileInputRef.current?.click()}>
                                         上传
                                     </Button>
                                 </div>
@@ -466,8 +477,8 @@ export default function VideoPage() {
                                                 <span className="truncate">{item.name}</span>
                                             </div>
                                             <audio src={item.url} controls className="h-8 w-full" preload="metadata" />
-                                            <ReferenceOrderButtons index={index} total={audioReferences.length} onMove={(offset) => setAudioReferences((value) => moveListItem(value, index, offset))} />
-                                            <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setAudioReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label="移除参考音频">
+                                            <ReferenceOrderButtons index={index} total={audioReferences.length} label={seedanceReferenceLabel("audio", index)} onMove={(offset) => setAudioReferences((value) => moveListItem(value, index, offset))} />
+                                            <button type="button" className="absolute right-1 top-1 flex min-h-11 min-w-11 items-center justify-center rounded bg-black/60 text-white" onClick={() => setAudioReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label="移除参考音频">
                                                 <Trash2 className="size-3.5" />
                                             </button>
                                         </div>
@@ -526,10 +537,10 @@ export default function VideoPage() {
                     event.target.value = "";
                 }}
             />
-            <Drawer title="生成记录" placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
+            <Drawer title="生成记录" placement="bottom" height="min(82dvh, 736px)" rootClassName="mobile-bottom-drawer" open={logsOpen} onClose={() => setLogsOpen(false)}>
                 <LogPanel logs={logs} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={() => setDeleteConfirmOpen(true)} onPreviewLog={previewGenerationLog} />
             </Drawer>
-            <Drawer title="参数" placement="bottom" height="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
+            <Drawer title="参数" placement="bottom" height="82dvh" rootClassName="mobile-bottom-drawer" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="grid grid-cols-2 gap-3 pb-4">
                     <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
                 </div>
@@ -776,6 +787,10 @@ function filterAudioReferencesByDuration(existing: ReferenceAudio[], next: Refer
     return accepted;
 }
 
+function fulfilledValues<T>(results: PromiseSettledResult<T>[]) {
+    return results.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+}
+
 function moveListItem<T>(items: T[], index: number, offset: number) {
     const targetIndex = index + offset;
     if (targetIndex < 0 || targetIndex >= items.length) return items;
@@ -784,12 +799,12 @@ function moveListItem<T>(items: T[], index: number, offset: number) {
     return next;
 }
 
-function ReferenceOrderButtons({ index, total, onMove }: { index: number; total: number; onMove: (offset: number) => void }) {
+function ReferenceOrderButtons({ index, total, label, onMove }: { index: number; total: number; label: string; onMove: (offset: number) => void }) {
     if (total <= 1) return null;
     return (
         <div className="absolute inset-x-1 bottom-1 flex justify-between">
-            <Button size="small" className="!h-6 !w-6 !min-w-6 !rounded-full !bg-white/85 !p-0 !shadow-sm" icon={<ArrowLeft className="size-3" />} disabled={index <= 0} onClick={() => onMove(-1)} />
-            <Button size="small" className="!h-6 !w-6 !min-w-6 !rounded-full !bg-white/85 !p-0 !shadow-sm" icon={<ArrowRight className="size-3" />} disabled={index >= total - 1} onClick={() => onMove(1)} />
+            <Button type="text" className="!min-h-11 !min-w-11 !rounded-full !bg-white/90 !p-0 !shadow-sm" aria-label={`将${label}向前移动`} icon={<ArrowLeft className="size-4" />} disabled={index <= 0} onClick={() => onMove(-1)} />
+            <Button type="text" className="!min-h-11 !min-w-11 !rounded-full !bg-white/90 !p-0 !shadow-sm" aria-label={`将${label}向后移动`} icon={<ArrowRight className="size-4" />} disabled={index >= total - 1} onClick={() => onMove(1)} />
         </div>
     );
 }

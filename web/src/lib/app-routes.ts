@@ -23,8 +23,6 @@ const publicRoutes: readonly AppRouteDefinition[] = [
     { id: "image", path: "/image" },
     { id: "assets", path: "/assets" },
     { id: "prompts", path: "/prompts" },
-    { id: "canvas", path: "/canvas" },
-    { id: "canvas-project", path: "/canvas/:id" },
 ];
 
 export function routesFor(mode: AppMode): readonly AppRouteDefinition[] {

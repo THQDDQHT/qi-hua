@@ -13,6 +13,7 @@ import { generateImages, generateSingleImage, publicGenerationInput } from "@/se
 import { resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
 import { resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
+import { normalizeImageGenerationCount } from "@/lib/image-generation-policy";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { appCapabilities, appMode } from "@/lib/app-mode";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -3215,26 +3216,22 @@ async function hydrateAssistantImages(sessions: CanvasAssistantSession[]) {
 }
 
 function getGenerationCount(count: string) {
-    return Math.max(1, Math.min(15, Math.floor(Math.abs(Number(count)) || 1)));
+    return normalizeImageGenerationCount(count);
 }
 
 function isPublicCanvasNodeType(type: CanvasNodeType) {
     return type === CanvasNodeType.Image || type === CanvasNodeType.Text || type === CanvasNodeType.Config;
 }
 
-function publicImageConfig(session: PublicSession | null, config: AiConfig): Pick<AiConfig, "count" | "size" | "quality"> {
-    const generation = session?.generation;
-    const count = getGenerationCount(config.count || config.canvasImageCount);
+function publicImageConfig(_session: PublicSession | null, config: AiConfig): Pick<AiConfig, "size" | "quality"> {
     return {
-        count: String(generation?.counts.includes(count) ? count : generation?.counts[0] || 1),
-        size: generation?.sizes.includes(config.size) ? config.size : generation?.sizes[0] || "auto",
-        quality: generation?.qualities.includes(config.quality) ? config.quality : generation?.qualities[0] || "auto",
+        size: config.size || "auto",
+        quality: config.quality || "auto",
     };
 }
 
 function publicImageNodeConfig(session: PublicSession | null, config: AiConfig) {
-    const imageConfig = publicImageConfig(session, config);
-    return { ...imageConfig, count: Number(imageConfig.count) };
+    return { ...publicImageConfig(session, config), count: getGenerationCount(config.canvasImageCount || config.count) };
 }
 
 function applyNodeConfigPatch(node: CanvasNodeData, patch: Partial<CanvasNodeData["metadata"]>) {
@@ -3345,7 +3342,7 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
         audioFormat: node?.metadata?.audioFormat || config.audioFormat || defaultConfig.audioFormat,
         audioSpeed: node?.metadata?.audioSpeed || config.audioSpeed || defaultConfig.audioSpeed,
         audioInstructions: node?.metadata?.audioInstructions || config.audioInstructions || defaultConfig.audioInstructions,
-        count: String(node?.metadata?.count || (mode === "image" ? config.canvasImageCount || config.count : config.count) || defaultConfig.count),
+        count: mode === "image" ? String(normalizeImageGenerationCount(node?.metadata?.count ?? config.canvasImageCount ?? config.count, 3)) : String(node?.metadata?.count || config.count || defaultConfig.count),
     };
 }
 

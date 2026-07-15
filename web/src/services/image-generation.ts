@@ -1,10 +1,11 @@
 import { nanoid } from "nanoid";
 
 import { appMode, type AppMode } from "@/lib/app-mode";
+import { normalizeImageGenerationCount } from "@/lib/image-generation-policy";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { requestEdit, requestGeneration } from "@/services/api/image";
 import { imageToDataUrl } from "@/services/image-storage";
-import type { PublicSession, QuotaSnapshot } from "@/services/public-session";
+import { readPublicApiError, type PublicSession, type QuotaSnapshot } from "@/services/public-session";
 import type { AiConfig } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
 
@@ -36,9 +37,6 @@ export type GenerateImagesInput = {
 };
 
 export function publicGenerationInput(session: PublicSession, input: Pick<GenerateImagesInput, "count" | "size" | "quality" | "references">) {
-    if (!session.generation.counts.includes(input.count)) throw new Error("当前生成张数不受支持");
-    if (!session.generation.sizes.includes(input.size)) throw new Error("当前图片尺寸不受支持");
-    if (!session.generation.qualities.includes(input.quality)) throw new Error("当前图片质量不受支持");
     if ((input.references?.length || 0) > session.generation.maxReferenceImages) throw new Error(`参考图最多 ${session.generation.maxReferenceImages} 张`);
 }
 
@@ -69,17 +67,9 @@ async function referenceFiles(references: ReferenceImage[]) {
     return Promise.all(references.map(async (reference) => dataUrlToFile({ ...reference, dataUrl: await imageToDataUrl(reference) })));
 }
 
-async function readPublicError(response: Response) {
-    try {
-        const body = (await response.json()) as { errorCode?: string; error?: { code?: string; message?: string }; message?: string };
-        return body.errorCode || body.error?.code || body.error?.message || body.message || `公众生图请求失败：${response.status}`;
-    } catch {
-        return `公众生图请求失败：${response.status}`;
-    }
-}
-
 export function createImageGenerationFacade(dependencies: ImageGenerationDependencies) {
     async function generateImages(input: GenerateImagesInput): Promise<GenerationBatch> {
+        const count = normalizeImageGenerationCount(input.count);
         if (dependencies.mode === "public") {
             if (input.mask) throw new Error("公众模式暂不支持蒙版编辑");
             const requestKey = input.requestKey || crypto.randomUUID();
@@ -93,7 +83,7 @@ export function createImageGenerationFacade(dependencies: ImageGenerationDepende
                 const form = new FormData();
                 form.set("requestKey", requestKey);
                 form.set("prompt", input.prompt);
-                form.set("count", String(input.count));
+                form.set("count", String(count));
                 form.set("size", input.size);
                 form.set("quality", input.quality);
                 for (const file of await referenceFiles(references)) form.append("references", file);
@@ -101,11 +91,11 @@ export function createImageGenerationFacade(dependencies: ImageGenerationDepende
             } else {
                 path = "/api/images/generations";
                 headers = { "Content-Type": "application/json" };
-                body = JSON.stringify({ requestKey, prompt: input.prompt, count: input.count, size: input.size, quality: input.quality });
+                body = JSON.stringify({ requestKey, prompt: input.prompt, count: count, size: input.size, quality: input.quality });
             }
 
             const response = await dependencies.fetch(path, { method: "POST", credentials: "same-origin", headers, body, signal: input.signal });
-            if (!response.ok) throw new Error(await readPublicError(response));
+            if (!response.ok) throw await readPublicApiError(response, "公众生图请求失败");
             const batch = (await response.json()) as PublicBatchResponse;
             return {
                 results: (batch.results || []).map((result) => ({
@@ -120,7 +110,7 @@ export function createImageGenerationFacade(dependencies: ImageGenerationDepende
         }
 
         if (!input.selfHostedConfig) throw new Error("自部署生图需要本地渠道配置");
-        const config = { ...input.selfHostedConfig, count: String(input.count), size: input.size, quality: input.quality };
+        const config = { ...input.selfHostedConfig, count: String(count), size: input.size, quality: input.quality };
         const images = input.references?.length
             ? await dependencies.requestEdit(config, input.prompt, input.references, input.mask, { signal: input.signal })
             : await dependencies.requestGeneration(config, input.prompt, { signal: input.signal });

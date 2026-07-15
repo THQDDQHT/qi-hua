@@ -17,6 +17,12 @@ describe("图片输入校验", () => {
     expectCode(() => validateGenerationInput({ ...base, size: "custom" }), "INVALID_REQUEST");
   });
 
+  test("接受四张批次和自定义尺寸范围", () => {
+    expect(validateGenerationInput({ requestKey: "key", prompt: "cat", count: 4, size: "1600x912", quality: "auto" }))
+      .toMatchObject({ count: 4, size: "1600x912", quality: "auto" });
+    expectCode(() => validateGenerationInput({ requestKey: "key", prompt: "cat", count: 1, size: "3840x3840", quality: "auto" }), "INVALID_REQUEST");
+  });
+
   test("保留提示词原始字节并匹配固定指纹向量", () => {
     const generation = validateGenerationInput({
       requestKey: "key",

@@ -7,6 +7,7 @@ import { fetchChannelModels } from "@/services/api/image";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
 import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
+import { IMAGE_GENERATION_COUNTS } from "@/lib/image-generation-policy";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { createModelChannel, defaultBaseUrlForApiFormat, filterModelsByCapability, modelOptionLabel, modelOptionsFromChannels, normalizeModelOptionValue, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
 
@@ -342,15 +343,8 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                         children: (
                             <Form layout="vertical" requiredMark={false}>
                                 <div className="grid gap-4 md:grid-cols-4">
-                                    <Form.Item label="画布默认生图张数" extra="新建画布生图和配置节点默认使用，单个节点仍可单独覆盖。" className="mb-4">
-                                        <Input
-                                            type="number"
-                                            min={1}
-                                            max={15}
-                                            value={config.canvasImageCount}
-                                            onChange={(event) => updateConfig("canvasImageCount", event.target.value)}
-                                            onBlur={(event) => updateConfig("canvasImageCount", normalizeImageCount(event.target.value))}
-                                        />
+                                    <Form.Item label="画布默认生图张数" extra="新建画布生图和配置节点默认使用，单次最多 4 张，单个节点仍可单独覆盖。" className="mb-4">
+                                        <Select value={config.canvasImageCount} options={IMAGE_GENERATION_COUNTS.map((count) => ({ value: String(count), label: `${count} 张` }))} onChange={(value) => updateConfig("canvasImageCount", value)} />
                                     </Form.Item>
                                     <Form.Item label="默认音频声音" className="mb-4">
                                         <Select value={config.audioVoice} options={audioVoiceOptions} onChange={(value) => updateConfig("audioVoice", value)} />
@@ -554,10 +548,6 @@ function keepOrSuggest(current: string[], suggested: string[], allModels: string
 function normalizeDefaultModel(value: string, options: string[]) {
     if (options.includes(value)) return value;
     return options[0] || value;
-}
-
-function normalizeImageCount(value: string) {
-    return String(Math.max(1, Math.min(15, Math.floor(Math.abs(Number(value)) || 3))));
 }
 
 function uniqueModels(models: string[]) {

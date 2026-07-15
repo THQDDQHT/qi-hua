@@ -136,7 +136,7 @@ export const AnimatedThemeToggler = ({ children, className, duration = 400, vari
             onThemeChange?.(nextTheme);
         };
 
-        if (typeof document.startViewTransition !== "function") {
+        if (window.matchMedia("(prefers-reduced-motion: reduce)").matches || typeof document.startViewTransition !== "function") {
             applyTheme();
             return;
         }

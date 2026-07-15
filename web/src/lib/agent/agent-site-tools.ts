@@ -3,6 +3,7 @@ import type { NavigateFunction } from "react-router-dom";
 import { fetchPrompts } from "@/services/api/prompts";
 import { uploadImage } from "@/services/image-storage";
 import { imageAspectOptions, imageQualityOptions } from "@/components/image-settings-panel";
+import { IMAGE_GENERATION_COUNT_MAX, IMAGE_GENERATION_COUNT_MIN, normalizeImageGenerationCount } from "@/lib/image-generation-policy";
 import { videoResolutionOptions, videoSecondOptions, videoSizeOptions } from "@/components/video-settings-panel";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { useAssetStore } from "@/stores/use-asset-store";
@@ -90,7 +91,7 @@ function getImageConfig() {
         models: config.imageModels.map((value) => ({ value, label: modelOptionLabel(config, value) })),
         qualityOptions: imageQualityOptions,
         sizeOptions: imageAspectOptions,
-        countRange: { min: 1, max: 15 },
+        countRange: { min: IMAGE_GENERATION_COUNT_MIN, max: IMAGE_GENERATION_COUNT_MAX },
     };
 }
 
@@ -111,7 +112,7 @@ function runImageWorkbench(input: SiteToolInput, navigate: NavigateFunction) {
         applied.size = input.size;
     }
     if (input.count != null) {
-        const count = String(Math.max(1, Math.min(15, Math.floor(Number(input.count)) || 1)));
+        const count = String(normalizeImageGenerationCount(input.count));
         configStore.updateConfig("count", count);
         applied.count = count;
     }

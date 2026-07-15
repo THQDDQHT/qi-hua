@@ -35,8 +35,8 @@ export function AppTopNav() {
     return (
         <>
             {!hideHeader ? (
-                <header className="sticky top-0 z-20 h-14 shrink-0 border-b border-stone-200 bg-background/90 backdrop-blur-xl dark:border-stone-800">
-                    <div className="mx-auto flex h-full max-w-7xl items-stretch justify-between gap-5 px-6">
+                <header className="sticky top-0 z-20 shrink-0 border-b border-stone-200 bg-background/90 pt-[env(safe-area-inset-top)] backdrop-blur-xl dark:border-stone-800">
+                    <div className="mx-auto flex h-14 max-w-7xl items-stretch justify-between gap-3 px-3 sm:px-4 md:gap-5 md:px-6">
                         <div className="flex min-w-0 items-center">
                             <Link to="/" className="flex h-full shrink-0 items-center gap-2 text-sm font-semibold leading-none tracking-tight text-stone-950 transition hover:text-stone-600 dark:text-stone-100 dark:hover:text-stone-300">
                                 <span
@@ -51,7 +51,7 @@ export function AppTopNav() {
 
                             <button
                                 type="button"
-                                className="ml-3 inline-flex size-8 shrink-0 items-center justify-center text-stone-600 transition hover:text-stone-950 md:hidden dark:text-stone-300 dark:hover:text-white"
+                                className="ml-2 inline-flex size-11 shrink-0 items-center justify-center rounded-xl text-stone-600 transition hover:text-stone-950 active:bg-stone-100 md:hidden dark:text-stone-300 dark:hover:text-white dark:active:bg-stone-800"
                                 onClick={() => setMobileNavOpen(true)}
                                 aria-label="打开导航菜单"
                                 title="导航菜单"
@@ -67,6 +67,7 @@ export function AppTopNav() {
                                         <Link
                                             key={tool.slug}
                                             to={`/${tool.slug}`}
+                                            aria-current={active ? "page" : undefined}
                                             className={cn(
                                                 "relative flex h-14 shrink-0 items-center gap-2 text-sm leading-6 transition after:absolute after:inset-x-0 after:bottom-0 after:h-px",
                                                 active
@@ -87,11 +88,11 @@ export function AppTopNav() {
                                 <>
                                     <CodexStatusButton />
                                     <Tooltip title={panelOpen ? "收起 Agent" : "打开 Agent"}>
-                                        <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" icon={<Bot className="size-4" />} onClick={togglePanel} aria-label="打开 Agent" />
+                                        <Button type="text" shape="circle" className="!h-11 !w-11 !min-w-11 md:!h-8 md:!w-8 md:!min-w-8" icon={<Bot className="size-4" />} onClick={togglePanel} aria-label="打开 Agent" />
                                     </Tooltip>
                                 </>
                             ) : null}
-                            <UserStatusActions />
+                            <UserStatusActions showConfig={appCapabilities.channelConfig} minimal={!appCapabilities.channelConfig} />
                         </div>
                     </div>
                 </header>
@@ -113,7 +114,7 @@ function CodexStatusButton() {
     const title = connectError || (connected ? activity || "Codex 已连接" : enabled ? "Codex 连接中" : "Codex 未连接");
     return (
         <Tooltip title={title}>
-            <Button type="text" shape="circle" className="relative !h-8 !w-8 !min-w-8" onClick={() => openConfigDialog(false, "codex")} aria-label="Codex 连接状态">
+            <Button type="text" shape="circle" className="relative !h-11 !w-11 !min-w-11 md:!h-8 md:!w-8 md:!min-w-8" onClick={() => openConfigDialog(false, "codex")} aria-label="Codex 连接状态">
                 <span className="mx-auto block size-4" style={{ background: color, WebkitMask: "url(/icons/openai.svg) center / contain no-repeat", mask: "url(/icons/openai.svg) center / contain no-repeat" }} />
                 <span className="absolute right-1 top-1 size-2 rounded-full border border-background" style={{ background: color }} />
             </Button>

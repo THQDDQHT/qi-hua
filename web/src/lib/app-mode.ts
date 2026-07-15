@@ -15,7 +15,7 @@ export type AppCapability =
 const capabilityMatrix: Record<AppMode, Readonly<Record<AppCapability, boolean>>> = {
     public: {
         imageGeneration: true,
-        canvas: true,
+        canvas: false,
         assets: true,
         prompts: true,
         videoGeneration: false,

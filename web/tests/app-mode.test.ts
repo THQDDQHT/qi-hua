@@ -10,7 +10,7 @@ assert.equal(resolveAppMode("public"), "public");
 
 const publicCapabilities = capabilitiesFor("public");
 assert.equal(publicCapabilities.imageGeneration, true);
-assert.equal(publicCapabilities.canvas, true);
+assert.equal(publicCapabilities.canvas, false);
 assert.equal(publicCapabilities.assets, true);
 assert.equal(publicCapabilities.prompts, true);
 assert.equal(publicCapabilities.videoGeneration, false);
@@ -22,7 +22,8 @@ assert.equal(publicCapabilities.channelConfig, false);
 assert.equal(capabilitiesFor("self-hosted").agent, true);
 
 const publicPaths = routesFor("public").map((route) => route.path);
-assert.deepEqual(publicPaths, ["/", "/image", "/assets", "/prompts", "/canvas", "/canvas/:id"]);
+assert.deepEqual(publicPaths, ["/", "/image", "/assets", "/prompts"]);
+assert.equal(publicPaths.includes("/canvas"), false);
 assert.equal(publicPaths.includes("/video"), false);
 assert.equal(publicPaths.includes("/config"), false);
 assert.equal(routesFor("self-hosted").some((route) => route.path === "/video"), true);
@@ -30,7 +31,7 @@ assert.equal(routesFor("self-hosted").some((route) => route.path === "/config"),
 
 assert.deepEqual(
     navigationToolsFor("public").map((tool) => tool.slug),
-    ["canvas", "image", "prompts", "assets"],
+    ["image", "prompts", "assets"],
 );
 assert.equal(navigationToolsFor("self-hosted").some((tool) => tool.slug === "config"), true);
 

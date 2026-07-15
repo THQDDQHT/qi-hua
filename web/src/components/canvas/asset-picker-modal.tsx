@@ -16,7 +16,7 @@ type Props = {
 
 export function AssetPickerModal({ open, onInsert, onClose }: Props) {
     return (
-        <Modal title="选择素材" open={open} onCancel={onClose} footer={null} width={860} destroyOnHidden styles={{ body: { padding: "0 24px 24px", minHeight: 480 } }}>
+        <Modal title="选择素材" open={open} onCancel={onClose} footer={null} width={860} destroyOnHidden rootClassName="asset-picker-modal" styles={{ body: { padding: "0 16px calc(16px + env(safe-area-inset-bottom))" } }}>
             <MyAssetsTab onInsert={onInsert} />
         </Modal>
     );
@@ -35,7 +35,8 @@ function PickerCard({ title, kind, cover, onClick }: { title: string; kind: stri
     return (
         <button
             type="button"
-            className="group relative cursor-pointer overflow-hidden rounded-lg border border-stone-200 bg-white text-left transition hover:border-stone-400 hover:shadow-md dark:border-stone-700 dark:bg-stone-900 dark:hover:border-stone-500"
+            className="group relative cursor-pointer overflow-hidden rounded-lg border border-stone-200 bg-white text-left transition hover:border-stone-400 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500 dark:border-stone-700 dark:bg-stone-900 dark:hover:border-stone-500"
+            aria-label={`插入${kind === "image" ? "图片" : kind === "video" ? "视频" : "文本"}素材：${title}`}
             onClick={onClick}
         >
             {cover ? (
@@ -49,7 +50,7 @@ function PickerCard({ title, kind, cover, onClick }: { title: string; kind: stri
                     <Tag className="m-0 shrink-0 text-[10px]">{kind === "image" ? "图片" : kind === "video" ? "视频" : "文本"}</Tag>
                 </div>
             </div>
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-stone-950/0 text-sm font-medium text-white opacity-0 transition group-hover:bg-stone-950/55 group-hover:opacity-100">插入</div>
+            <div className="border-t border-stone-200 px-2.5 py-2 text-center text-xs font-medium text-stone-600 md:pointer-events-none md:absolute md:inset-0 md:flex md:items-center md:justify-center md:border-0 md:bg-stone-950/0 md:text-sm md:text-white md:opacity-0 md:transition md:group-hover:bg-stone-950/55 md:group-hover:opacity-100 dark:border-stone-700 dark:text-stone-300 md:dark:text-white">插入</div>
         </button>
     );
 }
@@ -85,10 +86,9 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
 
     return (
         <div className="space-y-4">
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
                 <Input
-                    className="w-56"
-                    size="small"
+                    className="min-h-11 w-full text-base sm:w-56 sm:text-sm"
                     prefix={<Search className="size-3.5 text-stone-400" />}
                     placeholder="搜索素材"
                     value={keyword}
@@ -98,12 +98,12 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
                         setKeyword(e.target.value);
                     }}
                 />
-                <div className="flex gap-1.5">
+                <div className="flex flex-wrap gap-2">
                     {kindOptions.map((opt) => (
                         <Tag.CheckableTag
                             key={opt.value}
                             checked={kindFilter === opt.value}
-                            className={cn("prompt-filter-tag", kindFilter === opt.value && "is-active")}
+                            className={cn("prompt-filter-tag flex min-h-11 items-center px-4", kindFilter === opt.value && "is-active")}
                             onChange={() => {
                                 setPage(1);
                                 setKindFilter(opt.value);
@@ -116,7 +116,7 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
             </div>
 
             {visible.length ? (
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
                     {visible.map((asset) => (
                         <PickerCard key={asset.id} title={asset.title} kind={asset.kind} cover={asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "")} onClick={() => handleInsert(asset)} />
                     ))}

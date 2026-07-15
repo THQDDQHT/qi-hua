@@ -5,7 +5,7 @@ import { PublicGenerationError } from "../domain/public-generation";
 
 export const GENERATION_POLICY = {
   counts: [1, 2, 3, 4] as const,
-  sizes: ["auto", "1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"] as const,
+  sizes: ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "2048x2048", "2048x1152", "1152x2048", "3840x2160", "2160x3840", "auto"] as const,
   qualities: ["auto", "high", "medium", "low"] as const,
   maxPromptLength: 4000,
   maxRequestKeyLength: 128,
@@ -14,10 +14,14 @@ export const GENERATION_POLICY = {
   maxTotalReferenceBytes: 20 * 1024 * 1024,
   maxReferencePixels: 8_294_400,
   maxReferenceEdge: 3840,
+  maxOutputPixels: 8_294_400,
+  maxOutputEdge: 3840,
 } as const;
 
-export type GenerationSize = (typeof GENERATION_POLICY.sizes)[number];
+type FixedGenerationSize = (typeof GENERATION_POLICY.sizes)[number];
+export type GenerationSize = FixedGenerationSize | `${number}x${number}`;
 export type GenerationQuality = (typeof GENERATION_POLICY.qualities)[number];
+type GenerationCount = (typeof GENERATION_POLICY.counts)[number];
 
 export type GenerationInput = {
   requestKey: string;
@@ -46,6 +50,19 @@ function stringField(value: unknown, name: string) {
   return value;
 }
 
+function isGenerationSize(value: unknown): value is GenerationSize {
+  if (typeof value !== "string") return false;
+  if (GENERATION_POLICY.sizes.includes(value as FixedGenerationSize)) return true;
+  const match = value.match(/^([1-9]\d*)x([1-9]\d*)$/);
+  if (!match) return false;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  return Number.isSafeInteger(width)
+    && Number.isSafeInteger(height)
+    && Math.max(width, height) <= GENERATION_POLICY.maxOutputEdge
+    && width * height <= GENERATION_POLICY.maxOutputPixels;
+}
+
 export function validateGenerationInput(value: Record<string, unknown>): GenerationInput {
   const requestKey = stringField(value.requestKey, "requestKey");
   const prompt = stringField(value.prompt, "prompt");
@@ -59,10 +76,10 @@ export function validateGenerationInput(value: Record<string, unknown>): Generat
   if (!prompt.trim() || prompt.length > GENERATION_POLICY.maxPromptLength) {
     invalid("提示词不能为空且最长 4000 个字符");
   }
-  if (!Number.isSafeInteger(count) || !GENERATION_POLICY.counts.includes(count as 1 | 2 | 3 | 4)) {
+  if (!Number.isSafeInteger(count) || !GENERATION_POLICY.counts.includes(count as GenerationCount)) {
     invalid("count 必须是 1 到 4 的安全整数");
   }
-  if (typeof size !== "string" || !GENERATION_POLICY.sizes.includes(size as GenerationSize)) {
+  if (!isGenerationSize(size)) {
     invalid("size 不在允许列表中");
   }
   if (typeof quality !== "string" || !GENERATION_POLICY.qualities.includes(quality as GenerationQuality)) {
