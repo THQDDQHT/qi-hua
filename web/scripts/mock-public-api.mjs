@@ -17,7 +17,7 @@ const session = {
         enabled: true,
         modelLabel: "模拟生图",
         maxPromptLength: 4000,
-        maxReferenceImages: 4,
+        maxReferenceImages: 1,
     },
 };
 
@@ -44,6 +44,7 @@ async function readGenerationInput(request, edits) {
         count: Number(form.get("count")),
         size: form.get("size"),
         quality: form.get("quality"),
+        references: form.getAll("references"),
     };
 }
 
@@ -57,6 +58,8 @@ async function generate(request, edits) {
     if (!String(input.prompt || "").trim() || !Number.isInteger(input.count) || input.count < 1 || input.count > 4 || !validSize(input.size) || !qualities.has(input.quality)) {
         return json({ error: { code: "INVALID_REQUEST", message: "模拟请求参数无效" } }, 400);
     }
+    if (edits && !input.references.length) return json({ error: { code: "INVALID_IMAGE", message: "至少需要一张参考图" } }, 400);
+    if (edits && input.references.length > 1) return json({ error: { code: "REQUEST_TOO_LARGE", message: "参考图最多 1 张" } }, 413);
     return json({
         status: "completed",
         replayed: false,

@@ -9,7 +9,7 @@ export const GENERATION_POLICY = {
   qualities: ["auto", "high", "medium", "low"] as const,
   maxPromptLength: 4000,
   maxRequestKeyLength: 128,
-  maxReferenceImages: 4,
+  maxReferenceImages: 1,
   maxReferenceBytes: 10 * 1024 * 1024,
   maxTotalReferenceBytes: 20 * 1024 * 1024,
   maxReferencePixels: 8_294_400,
@@ -98,7 +98,7 @@ export function validateGenerationInput(value: Record<string, unknown>): Generat
 export async function validateReferenceImages(files: readonly File[]): Promise<ValidatedReference[]> {
   if (files.length < 1) invalid("至少需要一张参考图", "INVALID_IMAGE");
   if (files.length > GENERATION_POLICY.maxReferenceImages) {
-    invalid("参考图最多 4 张", "REQUEST_TOO_LARGE");
+    invalid(`参考图最多 ${GENERATION_POLICY.maxReferenceImages} 张`, "REQUEST_TOO_LARGE");
   }
 
   const totalBytes = files.reduce((total, file) => total + file.size, 0);

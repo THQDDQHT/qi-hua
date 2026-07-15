@@ -7,7 +7,7 @@ const quota = { limit: 10, used: 2, reserved: 1, remaining: 7, resetAt: "2026-07
 const session = {
     mode: "public" as const,
     quota,
-    generation: { modelLabel: "免费生图模型", maxPromptLength: 4000, maxReferenceImages: 4 },
+    generation: { modelLabel: "免费生图模型", maxPromptLength: 4000, maxReferenceImages: 1 },
 };
 
 let sessionCalls = 0;

@@ -13,7 +13,7 @@ import { generateImages, generateSingleImage, publicGenerationInput } from "@/se
 import { resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
 import { resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
-import { normalizeImageGenerationCount } from "@/lib/image-generation-policy";
+import { normalizeImageGenerationCount, selectImageGenerationReferences } from "@/lib/image-generation-policy";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { appCapabilities, appMode } from "@/lib/app-mode";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -2045,7 +2045,6 @@ function InfiniteCanvasPage() {
                 buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? `请根据要求修改以下文本。\n\n原文：\n${sourceTextContent}\n\n修改要求：\n${prompt}` : prompt),
             );
             const effectivePrompt = generationContext.prompt.trim();
-            if (publicMode && !canStartPublicImageGeneration(generationConfig, generationContext.referenceImages)) return;
             setRunningNodeId(nodeId);
             const runController = startGenerationRequest(nodeId, nodeId, nodeId);
             const markSourceStatus = sourceNode?.type !== CanvasNodeType.Image && !editingTextNode;
@@ -2068,7 +2067,9 @@ function InfiniteCanvasPage() {
                         isImageNode && sourceNode?.metadata?.content
                             ? [{ id: sourceNode.id, name: `${sourceNode.title || sourceNode.id}.png`, type: sourceNode.metadata.mimeType || "image/png", dataUrl: sourceNode.metadata.content, storageKey: sourceNode.metadata.storageKey }]
                             : [];
-                    const referenceImages = sourceReference.length ? sourceReference : generationContext.referenceImages;
+                    const candidateReferenceImages = sourceReference.length ? sourceReference : generationContext.referenceImages;
+                    const referenceImages = selectImageGenerationReferences(candidateReferenceImages);
+                    if (candidateReferenceImages.length > referenceImages.length) message.info("图片生成仅使用第一张参考图");
                     const generationType = referenceImages.length ? ("edit" as const) : ("generation" as const);
                     if (publicMode && !canStartPublicImageGeneration(generationConfig, referenceImages)) {
                         finishGenerationRequest(nodeId, runController);
@@ -2405,7 +2406,9 @@ function InfiniteCanvasPage() {
                 setNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails: "参考图片已丢失，无法继续重试" } } : item)));
                 return;
             }
-            const retryImages = retryReferenceImages || [];
+            const candidateRetryImages = retryReferenceImages || [];
+            const retryImages = node.type === CanvasNodeType.Image ? selectImageGenerationReferences(candidateRetryImages) : candidateRetryImages;
+            if (node.type === CanvasNodeType.Image && candidateRetryImages.length > retryImages.length) message.info("图片重试仅使用第一张参考图");
             if (!canStartPublicImageGeneration(generationConfig, retryImages)) return;
 
             setRunningNodeId(node.id);
@@ -2449,9 +2452,7 @@ function InfiniteCanvasPage() {
                 const uploadedImage = await uploadImage(result.image.dataUrl);
                 const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
                 const imageSize = fitNodeSize(uploadedImage.width, uploadedImage.height, imageConfig.width, imageConfig.height);
-                const generationMetadata = savedImageMetadata?.generationType
-                    ? { generationType: savedImageMetadata.generationType, model: generationConfig.model, size: generationConfig.size, quality: generationConfig.quality, count: savedImageMetadata.count || 1, references: savedImageMetadata.references }
-                    : buildImageGenerationMetadata(useReferenceImages ? "edit" : "generation", generationConfig, 1, retryImages);
+                const generationMetadata = buildImageGenerationMetadata(useReferenceImages ? "edit" : "generation", generationConfig, 1, retryImages);
                 setNodes((prev) =>
                     prev.map((item) =>
                         item.id === node.id

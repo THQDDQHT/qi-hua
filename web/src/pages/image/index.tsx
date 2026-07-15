@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
+import { BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Tooltip, Typography } from "antd";
 import localforage from "localforage";
@@ -11,7 +11,7 @@ import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/a
 import { canvasThemes } from "@/lib/canvas-theme";
 import { appMode } from "@/lib/app-mode";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
-import { normalizeImageGenerationCount } from "@/lib/image-generation-policy";
+import { assertImageGenerationReferenceLimit, IMAGE_GENERATION_REFERENCE_LIMIT, normalizeImageGenerationCount, selectImageGenerationReferences } from "@/lib/image-generation-policy";
 import { generateImages, generateSingleImage, type GeneratedImageResult } from "@/services/image-generation";
 import { usePublicSessionStore } from "@/stores/use-public-session-store";
 import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
@@ -114,7 +114,7 @@ export default function ImagePage() {
         Boolean(
             publicGeneration &&
             prompt.trim().length <= publicGeneration.maxPromptLength &&
-            references.length <= publicGeneration.maxReferenceImages,
+            references.length <= Math.min(IMAGE_GENERATION_REFERENCE_LIMIT, publicGeneration.maxReferenceImages),
         );
     const canGenerate =
         Boolean(prompt.trim()) &&
@@ -132,8 +132,7 @@ export default function ImagePage() {
         void refreshLogs();
     }, []);
 
-    const publicReferenceLimit = publicGeneration?.maxReferenceImages ?? 4;
-    const remainingReferenceSlots = publicMode ? Math.max(0, publicReferenceLimit - references.length) : Number.POSITIVE_INFINITY;
+    const remainingReferenceSlots = Math.max(0, IMAGE_GENERATION_REFERENCE_LIMIT - references.length);
     const canAddReferences = remainingReferenceSlots > 0;
     const uploadingReferences = referenceUploads > 0;
 
@@ -148,7 +147,7 @@ export default function ImagePage() {
             );
             const nextReferences = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
             const failures = settled.flatMap((result, index) => (result.status === "rejected" ? [{ name: files[index].name, reason: result.reason instanceof Error ? result.reason.message : "上传失败" }] : []));
-            if (nextReferences.length) setReferences((value) => [...value, ...nextReferences]);
+            if (nextReferences.length) setReferences((value) => selectImageGenerationReferences([...value, ...nextReferences]));
             if (failures.length) message.warning(`成功添加 ${nextReferences.length} 张，失败 ${failures.length} 张：${failures.slice(0, 2).map((item) => `${item.name}（${item.reason}）`).join("；")}`);
             else if (nextReferences.length) message.success(`已添加 ${nextReferences.length} 张参考图`);
             return nextReferences.length;
@@ -164,18 +163,18 @@ export default function ImagePage() {
             return;
         }
         if (!canAddReferences) {
-            message.warning(`公众模式最多添加 ${publicReferenceLimit} 张参考图`);
+            message.warning(`图片生成最多添加 ${IMAGE_GENERATION_REFERENCE_LIMIT} 张参考图`);
             return;
         }
         const acceptedFiles = imageFiles.slice(0, remainingReferenceSlots);
         await uploadReferenceFiles(acceptedFiles.map((file) => ({ blob: file, name: file.name })));
-        if (acceptedFiles.length < imageFiles.length) message.warning(`仅处理前 ${acceptedFiles.length} 张参考图，公众模式最多 ${publicReferenceLimit} 张`);
+        if (acceptedFiles.length < imageFiles.length) message.warning(`仅处理第一张参考图，图片生成最多使用 ${IMAGE_GENERATION_REFERENCE_LIMIT} 张`);
     };
 
     const addReferencesFromClipboard = async () => {
         try {
             if (!canAddReferences) {
-                message.warning(`公众模式最多添加 ${publicReferenceLimit} 张参考图`);
+                message.warning(`图片生成最多添加 ${IMAGE_GENERATION_REFERENCE_LIMIT} 张参考图`);
                 return;
             }
             const items = await navigator.clipboard.read();
@@ -187,7 +186,7 @@ export default function ImagePage() {
             }
             const acceptedBlobs = blobs.slice(0, remainingReferenceSlots);
             await uploadReferenceFiles(acceptedBlobs.map((blob, index) => ({ blob, name: `clipboard-${index + 1}.png` })));
-            if (acceptedBlobs.length < blobs.length) message.warning(`公众模式最多添加 ${publicReferenceLimit} 张参考图`);
+            if (acceptedBlobs.length < blobs.length) message.warning(`图片生成最多添加 ${IMAGE_GENERATION_REFERENCE_LIMIT} 张参考图`);
         } catch (error) {
             message.error(error instanceof Error ? `无法读取剪切板：${error.message}` : "剪切板里没有可读取的图片");
         }
@@ -303,11 +302,11 @@ export default function ImagePage() {
 
     const addResultToReferences = async (image: GeneratedImage, index: number) => {
         if (!canAddReferences) {
-            message.warning(`公众模式最多添加 ${publicReferenceLimit} 张参考图`);
+            message.warning(`图片生成最多添加 ${IMAGE_GENERATION_REFERENCE_LIMIT} 张参考图`);
             return;
         }
         const stored = await uploadImage(image.dataUrl);
-        setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
+        setReferences((value) => selectImageGenerationReferences([...value, { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]));
         message.success("已加入参考图");
     };
 
@@ -330,11 +329,11 @@ export default function ImagePage() {
             setPrompt(payload.content);
         } else if (payload.kind === "image") {
             if (!canAddReferences) {
-                message.warning(`公众模式最多添加 ${publicReferenceLimit} 张参考图`);
+                message.warning(`图片生成最多添加 ${IMAGE_GENERATION_REFERENCE_LIMIT} 张参考图`);
                 return;
             }
             const stored = await uploadImage(payload.dataUrl);
-            setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
+            setReferences((value) => selectImageGenerationReferences([...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]));
         } else {
             message.warning("生图工作台只能使用文本或图片素材");
         }
@@ -372,7 +371,9 @@ export default function ImagePage() {
         setPreviewLog(log);
         setLogsOpen(false);
         setPrompt(log.prompt);
-        setReferences(log.references || []);
+        const restoredReferences = selectImageGenerationReferences(log.references || []);
+        setReferences(restoredReferences);
+        if ((log.references?.length || 0) > IMAGE_GENERATION_REFERENCE_LIMIT) message.info("旧记录包含多张参考图，当前仅恢复第一张");
         if (!publicMode && (log.config.imageModel || log.model)) updateConfig("imageModel", log.config.imageModel || log.model);
         if (log.config.quality) updateConfig("quality", log.config.quality);
         if (log.config.size) updateConfig("size", log.config.size);
@@ -395,8 +396,8 @@ export default function ImagePage() {
                 message.warning(`提示词不能超过 ${publicGeneration.maxPromptLength} 个字符`);
                 return null;
             }
-            if (references.length > publicGeneration.maxReferenceImages) {
-                message.warning(`公众模式最多使用 ${publicGeneration.maxReferenceImages} 张参考图`);
+            if (references.length > Math.min(IMAGE_GENERATION_REFERENCE_LIMIT, publicGeneration.maxReferenceImages)) {
+                message.warning(`图片生成最多使用 ${IMAGE_GENERATION_REFERENCE_LIMIT} 张参考图`);
                 return null;
             }
             if (!publicQuota || publicQuota.remaining < requestedCount) {
@@ -406,6 +407,12 @@ export default function ImagePage() {
         } else if (!isAiConfigReady(effectiveConfig, model)) {
             message.warning("请先完成配置");
             openConfigDialog(true);
+            return null;
+        }
+        try {
+            assertImageGenerationReferenceLimit(references);
+        } catch (error) {
+            message.warning(error instanceof Error ? error.message : "图片生成最多使用一张参考图");
             return null;
         }
         return {
@@ -564,7 +571,7 @@ export default function ImagePage() {
 
                             <div className="min-w-0">
                                 <div className="mb-2 flex items-center justify-between gap-3">
-                                    <span className="text-base font-semibold">参考图{publicMode ? ` (${references.length}/${publicReferenceLimit})` : ""}</span>
+                                    <span className="text-base font-semibold">参考图 ({references.length}/{IMAGE_GENERATION_REFERENCE_LIMIT})</span>
                                     <div className="flex gap-2">
                                         <Button size="small" icon={<ClipboardPaste className="size-3.5" />} loading={uploadingReferences} disabled={!canAddReferences || uploadingReferences} onClick={() => void addReferencesFromClipboard()}>
                                             剪切板
@@ -588,7 +595,6 @@ export default function ImagePage() {
                                                 <img src={item.dataUrl} alt={item.name} className="size-full object-cover" />
                                                 <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{imageReferenceLabel(index)}</span>
                                             </div>
-                                            <ReferenceOrderButtons index={index} total={references.length} label={imageReferenceLabel(index)} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
                                             <button type="button" className="flex min-h-11 w-full items-center justify-center gap-1 border-t border-stone-200 text-xs text-red-600 dark:border-stone-800 dark:text-red-300" onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label={`移除${imageReferenceLabel(index)}`}>
                                                 <Trash2 className="size-3.5" />
                                                 移除
@@ -656,7 +662,6 @@ export default function ImagePage() {
                 ref={fileInputRef}
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
-                multiple
                 className="hidden"
                 onChange={(event) => {
                     void addReferences(event.target.files);
@@ -1009,24 +1014,6 @@ function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
         size: log.config?.size || log.size || "",
         count: log.config?.count || String(log.imageCount || log.successCount || 1),
     };
-}
-
-function moveListItem<T>(items: T[], index: number, offset: number) {
-    const targetIndex = index + offset;
-    if (targetIndex < 0 || targetIndex >= items.length) return items;
-    const next = [...items];
-    [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
-    return next;
-}
-
-function ReferenceOrderButtons({ index, total, label, onMove }: { index: number; total: number; label: string; onMove: (offset: number) => void }) {
-    if (total <= 1) return null;
-    return (
-        <div className="grid grid-cols-2 border-t border-stone-200 dark:border-stone-800">
-            <Button type="text" className="!min-h-11 !rounded-none" aria-label={`将${label}向前移动`} icon={<ArrowLeft className="size-4" />} disabled={index <= 0} onClick={() => onMove(-1)} />
-            <Button type="text" className="!min-h-11 !rounded-none border-l border-stone-200 dark:border-stone-800" aria-label={`将${label}向后移动`} icon={<ArrowRight className="size-4" />} disabled={index >= total - 1} onClick={() => onMove(1)} />
-        </div>
-    );
 }
 
 function buildLog({

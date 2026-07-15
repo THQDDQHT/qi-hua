@@ -191,6 +191,23 @@ describe("图片路由", () => {
     expect(calls[0].references[0]).toMatchObject({ mimeType: "image/png" });
   });
 
+  test("多张参考图返回 413 且不调用服务", async () => {
+    const bytes = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: "red" },
+    }).png().toBuffer();
+    const form = new FormData();
+    Object.entries(generationBody()).forEach(([key, value]) => form.set(key, String(value)));
+    form.append("references", new File([bytes], "first.png", { type: "image/png" }));
+    form.append("references", new File([bytes], "second.png", { type: "image/png" }));
+    const { app, calls } = createRouteApp();
+
+    const response = await app.request("/api/images/edits", { method: "POST", body: form });
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ error: { code: "REQUEST_TOO_LARGE", message: "参考图最多 1 张" } });
+    expect(calls).toHaveLength(0);
+  });
+
   test("超大编辑请求按 Content-Length 提前返回 413", async () => {
     const { app, calls } = createRouteApp();
     const response = await app.request("/api/images/edits", {

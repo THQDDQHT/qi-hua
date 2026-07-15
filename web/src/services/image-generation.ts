@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 
 import { appMode, type AppMode } from "@/lib/app-mode";
-import { normalizeImageGenerationCount } from "@/lib/image-generation-policy";
+import { assertImageGenerationReferenceLimit, IMAGE_GENERATION_REFERENCE_LIMIT, normalizeImageGenerationCount } from "@/lib/image-generation-policy";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { requestEdit, requestGeneration } from "@/services/api/image";
 import { imageToDataUrl } from "@/services/image-storage";
@@ -37,7 +37,8 @@ export type GenerateImagesInput = {
 };
 
 export function publicGenerationInput(session: PublicSession, input: Pick<GenerateImagesInput, "count" | "size" | "quality" | "references">) {
-    if ((input.references?.length || 0) > session.generation.maxReferenceImages) throw new Error(`参考图最多 ${session.generation.maxReferenceImages} 张`);
+    const limit = Math.min(IMAGE_GENERATION_REFERENCE_LIMIT, session.generation.maxReferenceImages);
+    if ((input.references?.length || 0) > limit) throw new Error(`图片生成最多使用 ${limit} 张参考图`);
 }
 
 type PublicBatchResponse = {
@@ -70,10 +71,11 @@ async function referenceFiles(references: ReferenceImage[]) {
 export function createImageGenerationFacade(dependencies: ImageGenerationDependencies) {
     async function generateImages(input: GenerateImagesInput): Promise<GenerationBatch> {
         const count = normalizeImageGenerationCount(input.count);
+        const references = input.references || [];
+        assertImageGenerationReferenceLimit(references);
         if (dependencies.mode === "public") {
             if (input.mask) throw new Error("公众模式暂不支持蒙版编辑");
             const requestKey = input.requestKey || crypto.randomUUID();
-            const references = input.references || [];
             let body: BodyInit;
             let path: string;
             let headers: HeadersInit | undefined;
@@ -111,8 +113,8 @@ export function createImageGenerationFacade(dependencies: ImageGenerationDepende
 
         if (!input.selfHostedConfig) throw new Error("自部署生图需要本地渠道配置");
         const config = { ...input.selfHostedConfig, count: String(count), size: input.size, quality: input.quality };
-        const images = input.references?.length
-            ? await dependencies.requestEdit(config, input.prompt, input.references, input.mask, { signal: input.signal })
+        const images = references.length
+            ? await dependencies.requestEdit(config, input.prompt, references, input.mask, { signal: input.signal })
             : await dependencies.requestGeneration(config, input.prompt, { signal: input.signal });
         return {
             results: images.map((image, index) => ({ index, status: "success", image: { ...image, mimeType: image.dataUrl.match(/^data:([^;,]+)/)?.[1] || "image/png" } })),

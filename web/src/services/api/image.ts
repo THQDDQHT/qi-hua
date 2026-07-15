@@ -2,7 +2,7 @@ import axios from "axios";
 
 import { buildApiUrl, resolveModelRequestConfig, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { nanoid } from "nanoid";
-import { normalizeImageGenerationCount } from "@/lib/image-generation-policy";
+import { assertImageGenerationReferenceLimit, normalizeImageGenerationCount } from "@/lib/image-generation-policy";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl } from "@/services/image-storage";
@@ -686,6 +686,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
 }
 
 export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], mask?: ReferenceImage, options?: RequestOptions) {
+    assertImageGenerationReferenceLimit(references);
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = normalizeImageGenerationCount(config.count);
     const requestPrompt = buildImageReferencePromptText(prompt, references);

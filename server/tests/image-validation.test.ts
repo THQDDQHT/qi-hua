@@ -47,6 +47,14 @@ describe("图片输入校验", () => {
     expect(reference.digest.byteLength).toBe(32);
   });
 
+  test("拒绝多张参考图", async () => {
+    const bytes = await sharp({ create: { width: 16, height: 16, channels: 3, background: "red" } }).png().toBuffer();
+    await expect(validateReferenceImages([
+      new File([bytes], "first.png", { type: "image/png" }),
+      new File([bytes], "second.png", { type: "image/png" }),
+    ])).rejects.toMatchObject({ code: "REQUEST_TOO_LARGE", message: "参考图最多 1 张" });
+  });
+
   test("拒绝伪装文件和超长边图片", async () => {
     await expect(validateReferenceImages([new File(["not image"], "fake.png", { type: "image/png" })]))
       .rejects.toMatchObject({ code: "INVALID_IMAGE" });

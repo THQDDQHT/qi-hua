@@ -150,7 +150,7 @@ describe("public anonymous session", () => {
         enabled: true,
         modelLabel: "免费生图模型",
         maxPromptLength: 4000,
-        maxReferenceImages: 4,
+        maxReferenceImages: 1,
       },
     });
     expect(JSON.stringify(body)).not.toContain(config.aiModel);

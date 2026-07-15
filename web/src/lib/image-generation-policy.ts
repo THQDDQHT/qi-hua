@@ -1,8 +1,19 @@
 export const IMAGE_GENERATION_COUNTS = [1, 2, 3, 4] as const;
 export const IMAGE_GENERATION_COUNT_MIN = IMAGE_GENERATION_COUNTS[0];
 export const IMAGE_GENERATION_COUNT_MAX = IMAGE_GENERATION_COUNTS[IMAGE_GENERATION_COUNTS.length - 1];
+export const IMAGE_GENERATION_REFERENCE_LIMIT = 1;
 
 export type ImageGenerationCount = (typeof IMAGE_GENERATION_COUNTS)[number];
+
+export function assertImageGenerationReferenceLimit(references: readonly unknown[]): void {
+    if (references.length > IMAGE_GENERATION_REFERENCE_LIMIT) {
+        throw new Error(`图片生成最多使用 ${IMAGE_GENERATION_REFERENCE_LIMIT} 张参考图`);
+    }
+}
+
+export function selectImageGenerationReferences<T>(references: readonly T[]): T[] {
+    return references.slice(0, IMAGE_GENERATION_REFERENCE_LIMIT);
+}
 
 export function normalizeImageGenerationCount(value: unknown, fallback: ImageGenerationCount = IMAGE_GENERATION_COUNT_MIN): ImageGenerationCount {
     const normalizedFallback = normalizeFallback(fallback);
