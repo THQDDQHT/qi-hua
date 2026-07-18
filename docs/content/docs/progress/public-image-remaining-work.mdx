@@ -402,7 +402,7 @@ Cloudflare -> web/Nginx -> api/Bun -> BullMQ/redis_shared -> worker/Bun -> 图�
 
 ### Cloudflare 和源站保护
 
-只有在源站防火墙限制为 Cloudflare 官方地址段后，应用才能信任 `CF-Connecting-IP`。
+只有在源站防火墙限制为 Cloudflare 官方地址段后，应用才能信任公网代理传来的 `CF-Connecting-IP`。本机 Cloudflare Tunnel 必须回连 `https://127.0.0.1:443`；Nginx 只额外信任回环地址，不能信任整个局域网或 Docker 网段。
 
 必须满足：
 
