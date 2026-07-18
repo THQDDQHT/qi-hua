@@ -88,6 +88,7 @@ jobs:
           PUBLIC_TLS_CERT_PATH=$RUNNER_TEMP/origin.crt
           PUBLIC_TLS_KEY_PATH=$RUNNER_TEMP/origin.key
           PORT=3001
+          DATABASE_DOCKER_NETWORK=public-ci-database
           DATABASE_URL=postgres://ci:ci@postgres.invalid/infinite_canvas
           AI_BASE_URL=https://provider.invalid/v1
           AI_API_KEY=ci-placeholder-key

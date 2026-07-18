@@ -15,7 +15,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 - 公众生图真实 API：使用受控供应商测试账号验证成功、401/403、429、5xx、超时、空图和非法图响应，以及额度结算与日志脱敏。状态：BLOCKED（当前无真实供应商测试凭据，自动化只使用本地 fake provider）。
 - 公众生图断连与迟到结果：验证客户端在请求中途断开后服务端仍完成结算，超时或过期后的迟到图片不交付。状态：BLOCKED（需要真实 HTTP 连接和 PostgreSQL 环境）。
 - 公众生图重启恢复：验证 api 进程或容器在 `reserved`/`running` 状态重启后，启动回收和每 60 秒调度能释放过期预占且不重复扣减。状态：BLOCKED（当前无 Docker 和 PostgreSQL 运行环境）。
-- 公众生图容器与 Nginx：验证双容器真实启动、`/health/live`/`ready`、反代、22MB 请求限制、190 秒超时、5r/m + burst 2 限流、缓存和 CSP。状态：BLOCKED（CI 只构建镜像、展开 Compose 并运行 `nginx -t`，不等同运行时验收）。
+- 公众生图容器与 Nginx：验证双容器真实启动、仅 API 加入既有 PostgreSQL 外部网络、`/health/live`/`ready`、反代、22MB 请求限制、190 秒超时、5r/m + burst 2 限流、缓存和 CSP。状态：BLOCKED（CI 只构建镜像、展开 Compose 并运行 `nginx -t`，不等同运行时验收）。
 - 公众生图 Cloudflare 与源站：在测试域名验证 Full (strict)、可信 `CF-Connecting-IP` 恢复、源站 80/443 仅允许 Cloudflare 网段、源站 IP 不可绕过，以及关闭开关止损。状态：BLOCKED（需要 Cloudflare、DNS、证书和防火墙权限）。
 - 公众生图移动与桌面交互：在 iPhone Safari、Android Chrome 验证相册/拍照、生成、预览、下载、素材和 PWA 安装。状态：BLOCKED（当前无真机和可自动化截图的显示环境）。
 

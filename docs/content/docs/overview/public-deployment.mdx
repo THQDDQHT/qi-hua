@@ -19,6 +19,7 @@ Cloudflare -> web/Nginx -> api/Bun -> 既有 PostgreSQL
 
 - Cloudflare 已为域名开启代理（橙云）并启用 **Full (strict)** TLS。
 - 机器已有 PostgreSQL，且创建了仅授予本应用所需迁移和运行权限的独立数据库账号。
+- PostgreSQL 容器已加入一个现有 Docker 网络，并在该网络中配置了稳定别名；公众 API 会加入该网络，前端容器不会加入。
 - 源站 HTTPS 端口只允许 Cloudflare 官方 IPv4 / IPv6 网段访问；SSH 和 PostgreSQL 不向公网开放。
 - 已创建 Cloudflare Origin Certificate，并可将证书和私钥以只读文件挂载到容器。
 - 生产环境使用新的、彼此独立的 `ANON_TOKEN_SECRET`、`IP_HASH_SECRET` 和 `IDEMPOTENCY_SECRET`；曾在聊天或调试中使用过的数据库密码必须先轮换。
@@ -38,7 +39,8 @@ cp .env.public.example .env.public
 - `PUBLIC_WEB_PORT`：通常为 `443`；这是 `web` 的唯一宿主端口。
 - `PUBLIC_TLS_CERT_PATH`、`PUBLIC_TLS_KEY_PATH`：Origin Certificate 与私钥的绝对路径。
 - `PUBLIC_ORIGIN`：例如 `https://canvas.example.com`，必须与浏览器 Origin 完全一致。
-- `DATABASE_URL`：连接到**既有** PostgreSQL 的生产专用最小权限账号。
+- `DATABASE_DOCKER_NETWORK`：既有 PostgreSQL 容器所在的 Docker 网络名称。该网络由外部维护，Compose 不会创建或删除。
+- `DATABASE_URL`：连接到**既有** PostgreSQL 的生产专用最小权限账号；主机名使用 PostgreSQL 在上述网络中的别名，例如 `postgres`。
 - `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL`：仅由 `api` 读取，绝不能写入前端构建参数。
 - 三个独立的 32 字符以上密钥。
 
@@ -58,7 +60,7 @@ Nginx 的 [`cloudflare-trusted.conf`](https://github.com/basketikun/infinite-can
 
 ## 本地静态配置检查
 
-不启动容器即可验证 Compose 展开、必填变量、TLS 文件路径、时区和生成开关：
+不启动容器即可验证 Compose 展开、必填变量、外部数据库网络、TLS 文件路径、时区和生成开关：
 
 ```bash
 ./deploy/public/scripts/check-public-config.sh
@@ -66,8 +68,10 @@ Nginx 的 [`cloudflare-trusted.conf`](https://github.com/basketikun/infinite-can
 
 该检查执行 `docker compose config --quiet`，不会启动、构建或部署服务。`docker-compose.public.yml` 使用两个服务：
 
-- `api`：无 `ports`，只有 `expose: 3001`，并使用 `server/Dockerfile` 的存活探针。
+- `api`：无 `ports`，只有 `expose: 3001`，同时加入前端私有网络和既有数据库网络，并使用 `server/Dockerfile` 的存活探针。
 - `web`：以 `VITE_APP_MODE=public` 构建，唯一映射 `${PUBLIC_WEB_PORT}:443`；Nginx 将 `/api/`、`/health/` 转发到 `api:3001`。
+
+只有 `api` 加入数据库网络。不要把 `web` 加入该网络，也不要为了容器连接继续将 PostgreSQL 端口映射到所有宿主地址。
 
 Nginx 对两个图片写接口设置每真实来源地址 `5r/m`、`burst=2 nodelay`，请求体上限 22 MB、上游读超时 190 秒，并禁止 API 和健康响应缓存。`index.html` 不做长缓存，带哈希的静态文件缓存一年。CSP 明确允许 `img-src blob:`，以支持本地图片预览。
 

@@ -13,6 +13,7 @@ services:
     restart: unless-stopped
     networks:
       - public-internal
+      - database
 
   web:
     image: infinite-canvas-public-web:local
@@ -43,3 +44,6 @@ services:
 networks:
   public-internal:
     driver: bridge
+  database:
+    name: ${DATABASE_DOCKER_NETWORK:?DATABASE_DOCKER_NETWORK is required}
+    external: true
