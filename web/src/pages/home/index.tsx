@@ -4,6 +4,7 @@ import { App, Button, Image, Tag } from "antd";
 import { useNavigate } from "react-router-dom";
 
 import { fetchPrompts, type Prompt } from "@/services/api/prompts";
+import { PromptCover } from "@/components/prompts/prompt-cover";
 import { navigationTools } from "@/constant/navigation-tools";
 import { appCapabilities } from "@/lib/app-mode";
 import { cn } from "@/lib/utils";
@@ -69,7 +70,7 @@ export default function IndexPage() {
                                     index === 3 && "md:col-span-2",
                                 )}
                             >
-                                <img src={item.coverUrl} alt={item.title} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
+                                <PromptCover src={item.coverUrl} alt={item.title} className="h-full w-full" imageClassName="transition duration-500 group-hover:scale-[1.03]" />
                                 <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/35 to-transparent p-4 text-white">
                                     <div className="mb-2 flex flex-wrap gap-1.5">
                                         {item.tags.slice(0, 2).map((tag) => (

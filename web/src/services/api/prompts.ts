@@ -34,7 +34,7 @@ const youMindGptImage2RawBase = "https://raw.githubusercontent.com/YouMind-OpenL
 const youMindNanoBananaProRawBase = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-nano-banana-pro-prompts/main";
 const davidWuGptImage2RawBase = "https://raw.githubusercontent.com/davidwuw0811-boop/awesome-gpt-image2-prompts/main";
 const cacheTtlMs = 1000 * 60 * 60;
-const promptCacheKey = "third-party-prompts";
+const promptCacheKey = "third-party-prompts-v2";
 const promptCacheStore = localforage.createInstance({ name: "infinite-canvas", storeName: "prompt_cache" });
 
 const categories: PromptCategory[] = [
@@ -187,13 +187,18 @@ function firstMatch(value: string, pattern: RegExp) {
 }
 
 function extractMarkdownImages(baseUrl: string, markdown: string) {
-    return Array.from(markdown.matchAll(/!\[[^\]]*]\(([^)]+)\)/g), (match) => absoluteImage(baseUrl, match[1])).filter(Boolean);
+    return Array.from(markdown.matchAll(/!\[[^\]]*]\(([^)]+)\)|<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi), (match) => absoluteImage(baseUrl, match[1] || match[2])).filter(isPreviewImage);
 }
 
 function absoluteImage(baseUrl: string, image: string) {
     if (!image) return "";
-    if (/^https?:\/\//i.test(image)) return image;
-    return `${baseUrl}/${image.replace(/^\.?\//, "")}`;
+    const normalizedImage = image.trim().replace(/&amp;/g, "&");
+    if (/^https?:\/\//i.test(normalizedImage)) return normalizedImage;
+    return `${baseUrl}/${normalizedImage.replace(/^\.?\//, "")}`;
+}
+
+function isPreviewImage(image: string) {
+    return Boolean(image) && !/(?:img\.)?shields\.io|awesome\.re\/badge|badge\.(?:svg|png)/i.test(image);
 }
 
 function tagsFromCategory(category: string) {
@@ -210,7 +215,7 @@ function youMindTags(title: string, modelTag: string) {
 }
 
 function davidWuTags(item: { category_cn?: string; category?: string; author?: string; source?: string; needs_ref?: boolean }) {
-    const tags = splitTags([item.category_cn, item.category, item.author, item.source].filter(Boolean).join("/"), /\//);
+    const tags = splitTags(item.category_cn || item.category || "", /\//);
     if (item.needs_ref) tags.push("需要参考图");
     return tags;
 }
