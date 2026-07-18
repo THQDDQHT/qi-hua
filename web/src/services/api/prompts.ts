@@ -21,6 +21,14 @@ type PromptCategory = {
 
 export const ALL_PROMPTS_OPTION = "全部";
 
+const promptCategoryLabels: Record<string, string> = {
+    "awesome-gpt-image": "综合生图精选",
+    "awesome-gpt4o-image-prompts": "GPT-4o 生图精选",
+    "youmind-gpt-image-2": "GPT Image 2 生图精选",
+    "youmind-nano-banana-pro": "Nano Banana Pro 生图精选",
+    "davidwu-gpt-image2-prompts": "GPT Image 2 社区精选",
+};
+
 export type PromptListResponse = {
     items: Prompt[];
     tags: string[];
@@ -246,4 +254,8 @@ function isActiveOption(value: string) {
 export function formatPromptDate(value: string) {
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+}
+
+export function formatPromptCategory(value: string) {
+    return promptCategoryLabels[value] || value;
 }

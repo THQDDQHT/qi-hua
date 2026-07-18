@@ -2,7 +2,7 @@ import { Check, Search } from "lucide-react";
 import { type UIEvent, useDeferredValue, useEffect, useState } from "react";
 import { App, Empty, Input, Modal, Select, Spin } from "antd";
 
-import { ALL_PROMPTS_OPTION } from "@/services/api/prompts";
+import { ALL_PROMPTS_OPTION, formatPromptCategory } from "@/services/api/prompts";
 import { PromptCard } from "./prompt-card";
 import { usePromptList } from "./use-prompt-list";
 
@@ -32,7 +32,7 @@ export function PromptSelectDialog({ open, onOpenChange, onSelect }: { open: boo
             <div data-canvas-no-zoom onWheelCapture={(event) => event.stopPropagation()}>
                 <div className="grid gap-2 sm:grid-cols-[minmax(240px,1fr)_220px_minmax(240px,1fr)]">
                     <Input size="large" prefix={<Search className="size-4 text-stone-400" />} value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索标题或提示词" />
-                    <Select size="large" showSearch optionFilterProp="label" value={selectedCategory} options={promptCategories.map((category) => ({ label: category, value: category }))} onChange={setSelectedCategory} aria-label="筛选分类" />
+                    <Select size="large" showSearch optionFilterProp="label" value={selectedCategory} options={promptCategories.map((category) => ({ label: formatPromptCategory(category), value: category }))} onChange={setSelectedCategory} aria-label="筛选分类" />
                     <Select
                         size="large"
                         mode="multiple"

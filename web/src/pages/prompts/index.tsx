@@ -7,7 +7,7 @@ import { usePromptList } from "@/components/prompts/use-prompt-list";
 import { PromptDetailDialog } from "./components/prompt-detail-dialog";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { useAssetStore } from "@/stores/use-asset-store";
-import { ALL_PROMPTS_OPTION, type Prompt } from "@/services/api/prompts";
+import { ALL_PROMPTS_OPTION, formatPromptCategory, type Prompt } from "@/services/api/prompts";
 
 export default function PromptsPage() {
     const { message } = App.useApp();
@@ -63,7 +63,7 @@ export default function PromptsPage() {
                                     showSearch
                                     optionFilterProp="label"
                                     value={selectedCategory}
-                                    options={promptCategoryOptions.map((category) => ({ label: category, value: category }))}
+                                    options={promptCategoryOptions.map((category) => ({ label: formatPromptCategory(category), value: category }))}
                                     onChange={setSelectedCategory}
                                     aria-label="筛选分类"
                                 />
