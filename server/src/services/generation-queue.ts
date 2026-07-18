@@ -29,7 +29,7 @@ export function createGenerationQueue(redisUrl: string) {
 
   return {
     async ping() {
-      if (connection.status === "wait") await connection.connect();
+      await queue.waitUntilReady();
       return connection.ping();
     },
     enqueue(requestId: string) {
