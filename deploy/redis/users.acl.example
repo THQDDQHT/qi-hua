@@ -1,0 +1,2 @@
+user redis_admin on >请替换为64位十六进制随机密码 ~* &* +@all
+user default off

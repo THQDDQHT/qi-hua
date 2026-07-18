@@ -1,0 +1,27 @@
+name: shared-redis
+
+services:
+  redis_shared:
+    image: redis:8.2.7-alpine
+    container_name: redis_shared
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - ./redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - ./secrets/users.acl:/run/secrets/users.acl:ro
+    restart: unless-stopped
+    mem_limit: 512m
+    pids_limit: 100
+    healthcheck:
+      test: ["CMD-SHELL", "password=$$(head -n 1 /run/secrets/users.acl | cut -d '>' -f 2 | cut -d ' ' -f 1) && redis-cli --no-auth-warning --user redis_admin --pass \"$$password\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - app_shared_net
+
+networks:
+  app_shared_net:
+    external: true
+    name: app_shared_net
