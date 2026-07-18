@@ -26,6 +26,17 @@ redis://redis_admin:<密码>@redis_shared:6379/0
 
 任务队列不要保存图片、Base64、API Key 等大数据或敏感内容。BullMQ 应使用自身的 `prefix` 选项并与 ACL 键范围保持一致，不要使用 ioredis 的 `keyPrefix`。
 
+啟画使用独立账号 `infinite_canvas`，只允许访问 `infinite-canvas:*` 键和频道。BullMQ 接入时必须设置：
+
+```ts
+const queue = new Queue("image-generation", {
+  connection,
+  prefix: "infinite-canvas",
+});
+```
+
+业务账号禁止管理命令、危险命令、脚本清空、Redis Functions 和跨项目信息探测，只保留 BullMQ 所需的 Lua 脚本加载，以及连接检查与工作进程退出所需的 `INFO`、`CLIENT UNBLOCK`。
+
 ## 运行参数
 
 - Redis 固定使用 `8.2.7-alpine`。
