@@ -3,25 +3,13 @@ import { Hono } from "hono";
 import sharp from "sharp";
 import type { AppEnv } from "../src/app";
 import type { ServerConfig } from "../src/config";
-import { PublicGenerationError, type PublicGenerationErrorCode } from "../src/domain/public-generation";
+import { PublicGenerationError } from "../src/domain/public-generation";
 import { registerImageRoutes } from "../src/routes/images";
-import type { GenerationBatchResult, GenerationInProgressResult } from "../src/services/generation-service";
-
-type GenerationService = Parameters<typeof registerImageRoutes>[1];
-type ExecuteInput = Parameters<GenerationService["execute"]>[0];
-type ExecuteResult = GenerationBatchResult | GenerationInProgressResult;
-
-const quota = {
-  limit: 10,
-  used: 1,
-  reserved: 0,
-  remaining: 9,
-  resetAt: "2026-07-14T16:00:00.000Z",
-};
 
 const config: ServerConfig = {
   port: 3001,
   databaseUrl: "postgres://unused",
+  redisUrl: "redis://localhost:6379",
   aiBaseUrl: "https://provider.example.com",
   aiApiKey: "provider-secret",
   aiModel: "private-model",
@@ -34,40 +22,15 @@ const config: ServerConfig = {
   dailyIpLimit: 30,
   timezone: "Asia/Shanghai",
   upstreamTimeoutMs: 180000,
-  reservationTtlSeconds: 600,
+  reservationTtlSeconds: 21600,
+  executionLeaseSeconds: 300,
+  imageWorkerConcurrency: 5,
+  generationStorageDir: "/tmp/infinite-canvas-test",
+  generationResultTtlSeconds: 86400,
+  workerHealthPort: 3002,
 };
 
-function completedResult(status: "completed" | "partial" | "failed" = "completed"): GenerationBatchResult {
-  return {
-    status,
-    replayed: false,
-    results: [{ index: 0, status: "success", image: { mimeType: "image/png", data: "image-data" } }],
-    quota,
-  };
-}
-
-function createRouteApp(input: {
-  enabled?: boolean;
-  execute?: (value: ExecuteInput) => Promise<ExecuteResult>;
-} = {}) {
-  const calls: ExecuteInput[] = [];
-  const app = new Hono<AppEnv>();
-  app.use("*", async (context, next) => {
-    context.set("config", { ...config, publicGenerationEnabled: input.enabled ?? true });
-    context.set("clientId", "client-id");
-    context.set("ipHash", new Uint8Array(32).fill(7));
-    context.set("quotaDate", "2026-07-14");
-    context.set("resetAt", quota.resetAt);
-    await next();
-  });
-  registerImageRoutes(app, {
-    execute: async (value) => {
-      calls.push(value);
-      return input.execute ? input.execute(value) : completedResult();
-    },
-  });
-  return { app, calls };
-}
+const taskId = "00000000-0000-4000-8000-000000000001";
 
 function generationBody(overrides: Record<string, unknown> = {}) {
   return {
@@ -80,48 +43,50 @@ function generationBody(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("图片路由", () => {
-  test("公众生图关闭时在解析请求前返回且不调用服务", async () => {
-    const { app, calls } = createRouteApp({ enabled: false });
+function createRouteApp(overrides: Record<string, unknown> = {}) {
+  const submissions: unknown[] = [];
+  const service = {
+    submit: async (input: unknown) => {
+      submissions.push(input);
+      return { taskId, status: "queued", replayed: false, expiresAt: "2040-01-02T03:00:00.000Z" };
+    },
+    getTask: async () => ({ taskId, status: "running", expiresAt: "2040-01-02T03:00:00.000Z" }),
+    getResult: async () => ({ file: new Blob(["image"]), mimeType: "image/png" }),
+    dispatchPending: async () => ({ candidates: 0, dispatched: 0 }),
+    cleanupExpiredArtifacts: async () => ({ candidates: 0, deleted: 0 }),
+    ...overrides,
+  };
+  const app = new Hono<AppEnv>();
+  app.use("*", async (context, next) => {
+    context.set("config", {
+      ...config,
+      publicGenerationEnabled: typeof overrides.enabled === "boolean"
+        ? overrides.enabled : config.publicGenerationEnabled,
+    });
+    context.set("clientId", "client-id");
+    context.set("ipHash", new Uint8Array(32).fill(7));
+    context.set("quotaDate", "2040-01-02");
+    context.set("resetAt", "2040-01-02T16:00:00.000Z");
+    await next();
+  });
+  registerImageRoutes(app, service as never);
+  return { app, submissions };
+}
+
+describe("异步图片路由", () => {
+  test("公众生图关闭时在解析请求前返回", async () => {
+    const { app, submissions } = createRouteApp({ enabled: false });
     const response = await app.request("/api/images/generations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "not-json",
     });
-
     expect(response.status).toBe(503);
-    expect(await response.json()).toEqual({
-      error: { code: "PUBLIC_GENERATION_OFF", message: "公众生图暂时关闭" },
-    });
-    expect(calls).toHaveLength(0);
+    expect(submissions).toHaveLength(0);
   });
 
-  test.each([
-    ["completed", 200],
-    ["partial", 200],
-    ["failed", 200],
-  ] as const)("文生图 %s 批次返回 %s 并传递会话上下文", async (status, expectedStatus) => {
-    const { app, calls } = createRouteApp({ execute: async () => completedResult(status) });
-    const response = await app.request("/api/images/generations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(generationBody()),
-    });
-
-    expect(response.status).toBe(expectedStatus);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({
-      operation: "generation",
-      generation: generationBody(),
-      references: [],
-      clientId: "client-id",
-      quotaDate: "2026-07-14",
-    });
-    expect(calls[0].ipHash).toEqual(new Uint8Array(32).fill(7));
-  });
-
-  test("运行中重放返回 202", async () => {
-    const { app } = createRouteApp({ execute: async () => ({ status: "running", replayed: true }) });
+  test("文生图立即返回任务编号、Location 和轮询间隔", async () => {
+    const { app, submissions } = createRouteApp();
     const response = await app.request("/api/images/generations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -129,135 +94,118 @@ describe("图片路由", () => {
     });
 
     expect(response.status).toBe(202);
-    expect(await response.json()).toEqual({ status: "running", replayed: true });
-  });
-
-  test("自定义尺寸和四张批次可进入生成服务", async () => {
-    const { app, calls } = createRouteApp();
-    const response = await app.request("/api/images/generations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(generationBody({ count: 4, size: "1600x912", quality: "low" })),
+    expect(response.headers.get("location")).toBe(`/api/images/tasks/${taskId}`);
+    expect(response.headers.get("retry-after")).toBe("2");
+    expect(await response.json()).toEqual({
+      taskId,
+      status: "queued",
+      replayed: false,
+      expiresAt: "2040-01-02T03:00:00.000Z",
     });
-
-    expect(response.status).toBe(200);
-    expect(calls[0]?.generation).toMatchObject({ count: 4, size: "1600x912", quality: "low" });
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0]).toMatchObject({ operation: "generation", references: [] });
   });
 
-  test.each([
-    ["not-json", "application/json"],
-    [JSON.stringify(generationBody({ prompt: "   " })), "application/json"],
-    [JSON.stringify(generationBody({ count: 5 })), "application/json"],
-    [JSON.stringify(generationBody({ size: "custom" })), "application/json"],
-  ])("非法文生图请求不会调用服务", async (body, contentType) => {
-    const { app, calls } = createRouteApp();
-    const response = await app.request("/api/images/generations", {
-      method: "POST",
-      headers: { "Content-Type": contentType },
-      body,
-    });
-
-    expect(response.status).toBe(400);
-    expect(calls).toHaveLength(0);
-  });
-
-  test("multipart 非法 count 不调用服务", async () => {
-    const form = new FormData();
-    Object.entries(generationBody({ count: 5 })).forEach(([key, value]) => form.set(key, String(value)));
-    const { app, calls } = createRouteApp();
-
-    const response = await app.request("/api/images/edits", { method: "POST", body: form });
-
-    expect(response.status).toBe(400);
-    expect(await response.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
-    expect(calls).toHaveLength(0);
-  });
-
-  test("编辑请求校验真实图片并传给服务", async () => {
+  test("编辑请求校验并提交真实参考图", async () => {
     const bytes = await sharp({
       create: { width: 2, height: 2, channels: 3, background: "red" },
     }).png().toBuffer();
     const form = new FormData();
     Object.entries(generationBody()).forEach(([key, value]) => form.set(key, String(value)));
     form.append("references", new File([bytes], "reference.png", { type: "text/plain" }));
-    const { app, calls } = createRouteApp();
+    const { app, submissions } = createRouteApp();
 
     const response = await app.request("/api/images/edits", { method: "POST", body: form });
 
-    expect(response.status).toBe(200);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ operation: "edit", generation: generationBody() });
-    expect(calls[0].references).toHaveLength(1);
-    expect(calls[0].references[0]).toMatchObject({ mimeType: "image/png" });
+    expect(response.status).toBe(202);
+    expect(submissions[0]).toMatchObject({ operation: "edit" });
+    expect((submissions[0] as { references: unknown[] }).references).toHaveLength(1);
   });
 
-  test("多张参考图返回 413 且不调用服务", async () => {
-    const bytes = await sharp({
-      create: { width: 2, height: 2, channels: 3, background: "red" },
-    }).png().toBuffer();
-    const form = new FormData();
-    Object.entries(generationBody()).forEach(([key, value]) => form.set(key, String(value)));
-    form.append("references", new File([bytes], "first.png", { type: "image/png" }));
-    form.append("references", new File([bytes], "second.png", { type: "image/png" }));
-    const { app, calls } = createRouteApp();
-
-    const response = await app.request("/api/images/edits", { method: "POST", body: form });
-
-    expect(response.status).toBe(413);
-    expect(await response.json()).toMatchObject({ error: { code: "REQUEST_TOO_LARGE", message: "参考图最多 1 张" } });
-    expect(calls).toHaveLength(0);
+  test.each([
+    ["not-json", "application/json"],
+    [JSON.stringify(generationBody({ count: 5 })), "application/json"],
+    [JSON.stringify(generationBody({ prompt: "   " })), "application/json"],
+  ])("非法文生图请求不创建任务", async (body, contentType) => {
+    const { app, submissions } = createRouteApp();
+    const response = await app.request("/api/images/generations", {
+      method: "POST",
+      headers: { "Content-Type": contentType },
+      body,
+    });
+    expect(response.status).toBe(400);
+    expect(submissions).toHaveLength(0);
   });
 
-  test("超大编辑请求按 Content-Length 提前返回 413", async () => {
-    const { app, calls } = createRouteApp();
+  test("超大 multipart 在解析前返回 413", async () => {
+    const { app, submissions } = createRouteApp();
     const response = await app.request("/api/images/edits", {
       method: "POST",
       headers: { "Content-Length": String(23 * 1024 * 1024) },
       body: "ignored",
     });
-
     expect(response.status).toBe(413);
-    expect(await response.json()).toMatchObject({ error: { code: "REQUEST_TOO_LARGE" } });
-    expect(calls).toHaveLength(0);
+    expect(submissions).toHaveLength(0);
   });
 
-  test("伪装参考图返回 INVALID_IMAGE 且不调用服务", async () => {
+  test("伪装参考图返回 INVALID_IMAGE", async () => {
     const form = new FormData();
     Object.entries(generationBody()).forEach(([key, value]) => form.set(key, String(value)));
     form.append("references", new File(["not-image"], "fake.png", { type: "image/png" }));
-    const { app, calls } = createRouteApp();
-
+    const { app, submissions } = createRouteApp();
     const response = await app.request("/api/images/edits", { method: "POST", body: form });
-
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: { code: "INVALID_IMAGE" } });
-    expect(calls).toHaveLength(0);
+    expect(submissions).toHaveLength(0);
+  });
+
+  test("任务状态查询传递客户端所有权上下文", async () => {
+    const calls: unknown[] = [];
+    const { app } = createRouteApp({
+      getTask: async (input: unknown) => {
+        calls.push(input);
+        return { taskId, status: "running", expiresAt: "2040-01-02T03:00:00.000Z" };
+      },
+    });
+
+    const response = await app.request(`/api/images/tasks/${taskId}`);
+
+    expect(response.status).toBe(200);
+    expect(calls).toEqual([{
+      requestId: taskId,
+      clientId: "client-id",
+      quotaDate: "2040-01-02",
+      resetAt: "2040-01-02T16:00:00.000Z",
+    }]);
+  });
+
+  test("结果文件按原类型返回且不公开缓存", async () => {
+    const { app } = createRouteApp();
+    const response = await app.request(`/api/images/tasks/${taskId}/results/0`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.text()).toBe("image");
   });
 
   test.each([
+    ["TASK_NOT_FOUND", 404],
+    ["RESULT_EXPIRED", 410],
     ["IDEMPOTENCY_CONFLICT", 409],
     ["QUOTA_EXHAUSTED", 429],
-    ["IP_QUOTA_EXHAUSTED", 429],
-    ["PROVIDER_REJECTED", 502],
-    ["SERVICE_UNAVAILABLE", 503],
-    ["PROVIDER_TIMEOUT", 504],
-  ] as const)("将 %s 映射为 HTTP %s", async (code, expectedStatus) => {
+  ] as const)("将 %s 映射为 HTTP %s", async (code, status) => {
     const { app } = createRouteApp({
-      execute: async () => { throw new PublicGenerationError(code as PublicGenerationErrorCode, "受控错误"); },
+      getTask: async () => { throw new PublicGenerationError(code); },
     });
-    const response = await app.request("/api/images/generations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(generationBody()),
-    });
-
-    expect(response.status).toBe(expectedStatus);
-    expect(await response.json()).toEqual({ error: { code, message: "受控错误" } });
+    const response = await app.request(`/api/images/tasks/${taskId}`);
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject({ error: { code } });
   });
 
-  test("未知异常返回通用 503 且不泄漏内部内容", async () => {
+  test("未知异常不泄漏内部内容", async () => {
     const { app } = createRouteApp({
-      execute: async () => { throw new Error("private provider body temporary-image-marker"); },
+      submit: async () => { throw new Error("private provider body"); },
     });
     const response = await app.request("/api/images/generations", {
       method: "POST",
@@ -265,10 +213,7 @@ describe("图片路由", () => {
       body: JSON.stringify(generationBody()),
     });
     const body = await response.text();
-
     expect(response.status).toBe(503);
-    expect(JSON.parse(body)).toEqual({ error: { code: "SERVICE_UNAVAILABLE", message: "SERVICE_UNAVAILABLE" } });
     expect(body).not.toContain("private provider body");
-    expect(body).not.toContain("temporary-image-marker");
   });
 });

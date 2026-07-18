@@ -2,17 +2,30 @@ import { createApp } from "./app";
 import { loadConfig } from "./config";
 import { createSql } from "./db/client";
 import { createQuotaRepository } from "./db/quota-repository";
-import { createImageProvider } from "./services/image-provider";
+import { createGenerationApiService } from "./services/generation-service";
+import { createGenerationQueue } from "./services/generation-queue";
+import { createGenerationStorage } from "./services/generation-storage";
 import { createQuotaService } from "./services/quota-service";
 
 const config = loadConfig(Bun.env);
 const sql = createSql(config.databaseUrl);
+const repository = createQuotaRepository(sql);
 const quotaService = createQuotaService({
-  repository: createQuotaRepository(sql),
+  repository,
   deviceLimit: config.dailyDeviceLimit,
   ipLimit: config.dailyIpLimit,
 });
-const provider = createImageProvider(config);
+const queue = createGenerationQueue(config.redisUrl);
+const generationService = createGenerationApiService({
+  sql,
+  repository,
+  quotaService,
+  queue,
+  storage: createGenerationStorage(config.generationStorageDir),
+  idempotencySecret: config.idempotencySecret,
+  reservationTtlSeconds: config.reservationTtlSeconds,
+  deviceLimit: config.dailyDeviceLimit,
+});
 
 async function sweepExpiredReservations() {
   try {
@@ -26,27 +39,49 @@ async function sweepExpiredReservations() {
 }
 
 await sweepExpiredReservations();
-const app = createApp({ config, sql, quotaService, provider });
+void generationService.dispatchPending().catch(() => {
+  console.error("Generation queue dispatch failed", { errorCode: "SERVICE_UNAVAILABLE" });
+});
+const app = createApp({ config, sql, generationService });
 const server = Bun.serve({ port: config.port, fetch: app.fetch });
 
-let sweeping = false;
+let maintaining = false;
 const timer = setInterval(async () => {
-  if (sweeping) return;
-  sweeping = true;
+  if (maintaining) return;
+  maintaining = true;
   try {
     await sweepExpiredReservations();
+    await generationService.cleanupExpiredArtifacts();
+  } catch {
+    console.error("Generation maintenance failed", { errorCode: "SERVICE_UNAVAILABLE" });
   } finally {
-    sweeping = false;
+    maintaining = false;
   }
 }, 60_000);
 timer.unref?.();
+
+let dispatching = false;
+const dispatchTimer = setInterval(async () => {
+  if (dispatching) return;
+  dispatching = true;
+  try {
+    await generationService.dispatchPending();
+  } catch {
+    console.error("Generation queue dispatch failed", { errorCode: "SERVICE_UNAVAILABLE" });
+  } finally {
+    dispatching = false;
+  }
+}, 2_000);
+dispatchTimer.unref?.();
 
 let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   clearInterval(timer);
+  clearInterval(dispatchTimer);
   await server.stop(true);
+  await queue.close();
   await sql.end({ timeout: 5 });
 }
 

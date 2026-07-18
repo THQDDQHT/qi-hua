@@ -1,6 +1,6 @@
 ---
 title: 公众生图部署
-description: 使用 Cloudflare、Nginx、Bun 和既有 PostgreSQL 部署公众免费生图入口
+description: 使用 Cloudflare、Nginx、Bun、BullMQ、Redis 和既有 PostgreSQL 部署公众免费生图入口
 ---
 
 # 公众生图部署
@@ -8,10 +8,12 @@ description: 使用 Cloudflare、Nginx、Bun 和既有 PostgreSQL 部署公众�
 公众入口是独立于现有 `docker-compose.yml` 和 `docker-compose.local.yml` 的生产配置。它使用以下拓扑：
 
 ```text
-Cloudflare -> web/Nginx -> api/Bun -> 既有 PostgreSQL
+Cloudflare -> web/Nginx -> api/Bun -> BullMQ/Redis -> worker/Bun -> 图片供应商
+                              |              |
+                              +-> PostgreSQL +-> 共享临时图片目录 <- api
 ```
 
-`web` 是唯一映射宿主端口的容器；`api` 仅通过 Compose 私有网络以端口 `3001` 被 `web` 访问。此配置不会创建 PostgreSQL 容器，也不应将 PostgreSQL 映射到公网。
+`web` 是唯一映射宿主端口的容器；`api` 仅通过 Compose 私有网络以端口 `3001` 被 `web` 访问。`worker` 不开放端口，只在容器内部使用 `3002` 健康接口。PostgreSQL 和 `redis_shared` 是独立维护的既有服务，本配置不会创建或删除它们，也不应将它们映射到公网。
 
 > 仅当源站防火墙已经只允许 Cloudflare 官方网段访问 HTTPS 端口时，才可以信任 `CF-Connecting-IP`。本仓库的配置不会修改防火墙。
 
@@ -19,7 +21,9 @@ Cloudflare -> web/Nginx -> api/Bun -> 既有 PostgreSQL
 
 - Cloudflare 已为域名开启代理（橙云）并启用 **Full (strict)** TLS。
 - 机器已有 PostgreSQL，且创建了仅授予本应用所需迁移和运行权限的独立数据库账号。
-- PostgreSQL 容器已加入一个现有 Docker 网络，并在该网络中配置了稳定别名；公众 API 会加入该网络，前端容器不会加入。
+- PostgreSQL 和健康的 `redis_shared` 已加入外部网络 `app_shared_net`，并分别配置了稳定别名；公众 API 和 worker 会加入该网络，前端容器不会加入。
+- Redis 已创建非管理账号 `infinite_canvas`，业务环境文件只包含该账号的 `REDIS_URL` 和固定的 `REDIS_PREFIX=infinite-canvas`。
+- 仓库下已创建仅供 API 和 worker 读写的 `data/public-generation-temp/`，该目录不会作为 Nginx 静态目录公开。
 - 源站 HTTPS 端口只允许 Cloudflare 官方 IPv4 / IPv6 网段访问；SSH 和 PostgreSQL 不向公网开放。
 - 已创建 Cloudflare Origin Certificate，并可将证书和私钥以只读文件挂载到容器。
 - 生产环境使用新的、彼此独立的 `ANON_TOKEN_SECRET`、`IP_HASH_SECRET` 和 `IDEMPOTENCY_SECRET`；曾在聊天或调试中使用过的数据库密码必须先轮换。
@@ -43,12 +47,18 @@ cp .env.public.example .env.public
 - `PUBLIC_ORIGIN`：例如 `https://canvas.example.com`，必须与浏览器 Origin 完全一致。
 - `DATABASE_DOCKER_NETWORK`：既有 PostgreSQL 容器所在的 Docker 网络名称。该网络由外部维护，Compose 不会创建或删除。
 - `DATABASE_URL`：连接到**既有** PostgreSQL 的生产专用最小权限账号；主机名使用 PostgreSQL 在上述网络中的别名，例如 `postgres`。
-- `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL`：仅由 `api` 读取，绝不能写入前端构建参数。
+- `REDIS_ENV_FILE`：独立 Redis 业务环境文件的绝对路径，例如 `/home/q2qs/projects/redis/infinite-canvas.env`；文件中的账号不能是 `redis_admin`、`admin` 或默认用户。
+- `AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL`：仅由 API 和 worker 读取，绝不能写入前端构建参数。
 - 三个独立的 32 字符以上密钥。
+- `IMAGE_WORKER_CONCURRENCY=5`：单个 worker 同时处理的队列任务数，可配置为 1–10。
+- `GENERATION_STORAGE_DIR=/data/public-generation-temp`：API 和 worker 容器中的固定共享目录。
+- `GENERATION_RESULT_TTL_SECONDS=86400`：成功结果文件临时保留 24 小时。
+- `RESERVATION_TTL_SECONDS=21600`、`EXECUTION_LEASE_SECONDS=300`：任务最长等待时间和单次执行租约。
+- `WORKER_HEALTH_PORT=3002`：仅供容器健康检查使用，不映射到宿主机。
 
 保持 `TIMEZONE=Asia/Shanghai`。首次上线时必须设为 `PUBLIC_GENERATION_ENABLED=false`，以便先完成不消耗额度的验证。
 
-`.env.public` 已被 `.gitignore` 忽略，不能提交。不要将它传给前端构建、浏览器、工单或日志。
+`.env.public` 已被 `.gitignore` 忽略，不能提交。Redis 业务环境文件同样必须保持权限 `600`，不能放入本仓库。两个文件都不能传给前端构建、浏览器、工单或日志。
 
 ## Cloudflare 可信地址
 
@@ -62,21 +72,32 @@ Nginx 的 [`cloudflare-trusted.conf`](https://github.com/basketikun/infinite-can
 
 ## 本地静态配置检查
 
-不启动容器即可验证 Compose 展开、必填变量、外部数据库网络、TLS 文件路径、时区和生成开关：
+不启动应用容器即可验证 Compose 展开、必填变量、外部共享网络、Redis 业务账号、临时目录、TLS 文件路径、时区和生成开关：
 
 ```bash
 ./deploy/public/scripts/check-public-config.sh
 ```
 
-该检查执行 `docker compose config --quiet`，不会启动、构建或部署服务。`docker-compose.public.yml` 使用两个常驻服务和一个维护服务：
+该检查要求既有 `redis_shared` 已经健康，然后执行 `docker compose config --quiet`；它不会启动、构建或部署应用服务。`docker-compose.public.yml` 使用三个常驻服务和一个维护服务：
 
-- `api`：无 `ports`，只有 `expose: 3001`，同时加入前端私有网络和既有数据库网络，并使用 `server/Dockerfile` 的存活探针。
+- `api`：无 `ports`，只有 `expose: 3001`，同时加入前端私有网络和 `app_shared_net`，加载应用与 Redis 两份环境文件，并读写共享临时图片目录。
+- `worker`：复用 API 镜像，以 `bun src/worker.ts` 启动；只加入 `app_shared_net`，不开放端口，使用内部 3002 健康接口，并与 API 读写同一临时目录。
 - `web`：以 `VITE_APP_MODE=public` 构建，唯一映射 `${PUBLIC_WEB_PORT}:443`；Nginx 将 `/api/`、`/health/` 转发到 `api:3001`。
 - `prompt-sync`：仅在 `maintenance` profile 下运行，下载第三方提示词封面并生成本地 WebP 快照，不连接数据库，也不常驻运行。
 
-只有 `api` 加入数据库网络。不要把 `web` 加入该网络，也不要为了容器连接继续将 PostgreSQL 端口映射到所有宿主地址。
+只有 API 和 worker 加入外部共享网络。不要把 `web` 加入该网络，也不要为了容器连接将 PostgreSQL 或 Redis 端口映射到宿主地址。
 
-Nginx 对两个图片写接口设置每真实来源地址 `5r/m`、`burst=2 nodelay`，并将经过 Cloudflare 可信地址规则还原后的 `$remote_addr` 传给 API；局域网直连时该值就是实际连接地址。请求体上限 22 MB、上游读超时 190 秒，并禁止 API 和健康响应缓存。`index.html` 不做长缓存，带哈希的静态文件缓存一年。CSP 明确允许 `img-src blob:`，以支持本地图片预览。
+Nginx 对两个图片写接口设置每真实来源地址 `5r/m`、`burst=2 nodelay`，并将经过 Cloudflare 可信地址规则还原后的 `$remote_addr` 传给 API；局域网直连时该值就是实际连接地址。请求体上限 22 MB，并禁止 API 和健康响应缓存。`index.html` 不做长缓存，带哈希的静态文件缓存一年。CSP 明确允许 `img-src blob:`，以支持本地图片预览。
+
+## 异步任务与临时结果
+
+图片提交接口只负责校验、预占额度、保存参考图和入队，始终返回 HTTP 202。浏览器拿到 `taskId` 后通过 `GET /api/images/tasks/:taskId` 短轮询；终态成功项返回同源结果地址，再由浏览器下载并保存到本地。每次轮询都是独立短请求，不依赖贯穿 Cloudflare 的长连接，因此不会把供应商生成时长转化为 Cloudflare 请求超时。
+
+默认首次等待 2 秒，随后按 3 秒、5 秒退避并保持 5 秒间隔；网络错误、408、429、5xx 和 Cloudflare 524 可继续退避重试。结果图片下载同样会做有界重试，并限制为当前任务的同源地址、受支持图片格式和 16 MiB。浏览器停止等待不等于取消服务端任务。最长等待取 6 小时与服务端 `expiresAt` 中较早者。
+
+Redis 只保存任务标识和状态，不保存图片、Base64、提示词、参考图或密钥。参考图和生成结果写入 `data/public-generation-temp/`，只由 API 和 worker 读写，不能挂载给 Web 容器。结果文件默认保留 24 小时；到期后结果文件接口返回 410，但任务状态和已经结算的额度仍保留。同一设备使用相同 `requestKey` 和相同载荷重放时返回原 `taskId`，在保留期内可以再次取得结果。
+
+当前网页不会持久化正在执行的 `taskId`。刷新或关闭页面不会取消服务端任务，但页面也不会自动找回这次任务；不要把 API 已支持重放和恢复查询误写成网页已支持刷新恢复。
 
 ## 同步提示词本地快照
 
@@ -105,31 +126,52 @@ docker compose --profile maintenance --env-file .env.public -f docker-compose.pu
 
 按以下顺序由具备服务器权限的运维人员操作：
 
-1. 保持 `PUBLIC_GENERATION_ENABLED=false` 并备份数据库。
-2. 审阅 `.env.public`、Cloudflare DNS/TLS 和源站防火墙规则；确认不能通过源站 IP 绕过 Cloudflare。
-3. 运行配置检查。
-4. 同步提示词本地快照，并确认 `prompts.json` 与 `covers/` 已写入服务器 `data/prompt-library/`。
-5. 显式执行迁移：
+1. 先给现有 API 和 Web 镜像各保留一个回滚标签，再确认 `redis_shared` 健康并加入 `app_shared_net`；审阅 `.env.public` 和独立 Redis 业务环境文件，但不要输出其中的密码。
+2. 创建共享临时目录并保持由部署用户独占读写：
 
    ```bash
+   install -d -m 700 data/public-generation-temp
+   ```
+
+3. 审阅 Cloudflare DNS/TLS 和源站防火墙规则，确认不能通过源站 IP 绕过 Cloudflare，然后运行配置检查。
+4. 同步提示词本地快照，并确认 `prompts.json` 与 `covers/` 已写入服务器 `data/prompt-library/`。
+5. 先只构建并更新兼容旧 200 响应的新 Web，确认它仍能调用当前同步 API：
+
+   ```bash
+   docker compose --env-file .env.public -f docker-compose.public.yml build web
+   docker compose --env-file .env.public -f docker-compose.public.yml up -d --no-deps web
+   ```
+
+6. 将 `PUBLIC_GENERATION_ENABLED=false`，仅重新创建当前 API 以停止新请求，然后备份数据库。此时不要先更新 API 镜像。
+7. 构建新 API 镜像，再显式执行向后兼容迁移：
+
+   ```bash
+   docker compose --env-file .env.public -f docker-compose.public.yml build api
    ./deploy/public/scripts/migrate-public.sh
    ```
 
-6. 启动 Compose 服务后，通过 Cloudflare 域名运行不写图片接口的 smoke 检查：
+8. 先启动复用新 API 镜像的 worker，再更新 API：
+
+   ```bash
+   docker compose --env-file .env.public -f docker-compose.public.yml up -d --no-deps worker
+   docker compose --env-file .env.public -f docker-compose.public.yml up -d --no-deps api
+   ```
+
+9. 确认 API 与 worker 健康，再通过 Cloudflare 域名运行不写图片接口的 smoke 检查：
 
    ```bash
    PUBLIC_ORIGIN=https://canvas.example.com ./deploy/public/scripts/smoke-public.sh
    ```
 
-7. 由内部账号生成一张图片，核对额度账务、429 限流、错误日志和供应商余额。
-8. 再次验证源站不可绕过；确认生产日志没有 Cookie、用户提示词、用户图片、明文 IP、连接串、密钥或供应商响应正文。
-9. 仅在上述检查完成后，将 `PUBLIC_GENERATION_ENABLED=true`，再重建并滚动更新 `api`。
+10. 由内部账号生成一张图片，确认提交返回 202、短轮询抵达终态、结果地址仅同一匿名设备可读，并核对额度账务、429 限流、临时文件清理、错误日志和供应商余额。
+11. 再次验证源站不可绕过；确认 API 和 worker 日志都没有 Cookie、用户提示词、用户图片、明文 IP、连接串、Redis 密码、供应商密钥或响应正文。
+12. 仅在上述检查完成后，将 `PUBLIC_GENERATION_ENABLED=true`，再重新创建 API 容器；worker 无需因开关变化而重新创建。
 
-止损或回滚时，优先将 `PUBLIC_GENERATION_ENABLED=false` 并仅更新 `api`。不要删除已应用的向后兼容数据库迁移，也不要通过删除数据恢复服务。
+止损或回滚时，优先将 `PUBLIC_GENERATION_ENABLED=false` 并仅更新 API，停止继续入队；需要停 worker 时使用 `docker compose stop -t 900 worker` 等待当前最多四槽任务退出。协议回滚必须先恢复旧 API、确认不再返回 202，最后才能恢复旧 Web。不要停止独立的 `redis_shared`，不要删除共享临时目录、队列数据或已应用的向后兼容数据库迁移。
 
 ## 日志安全检查
 
-将容器或采集系统导出的日志保存为本地文件后运行：
+将 API 或 worker 容器及采集系统导出的日志保存为本地文件后运行：
 
 ```bash
 ./deploy/public/scripts/check-public-log-safety.sh /path/to/public-api.log

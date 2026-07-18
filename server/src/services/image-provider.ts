@@ -5,7 +5,7 @@ import { PublicGenerationError } from "../domain/public-generation";
 
 export type ProviderImage = {
   mimeType: "image/jpeg" | "image/png" | "image/webp";
-  data: string;
+  bytes: Uint8Array;
 };
 
 export interface ImageProvider {
@@ -115,7 +115,7 @@ async function parseProviderResponse(response: Response): Promise<ProviderImage>
   } catch {
     providerError("SERVICE_UNAVAILABLE");
   }
-  return { mimeType: detected.mime, data };
+  return { mimeType: detected.mime, bytes };
 }
 
 export function createImageProvider(

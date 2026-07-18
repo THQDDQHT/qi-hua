@@ -13,7 +13,12 @@ import { createQuotaService } from "../src/services/quota-service";
 
 function fakeRepository(overrides: Partial<QuotaRepository> = {}): QuotaRepository {
   return {
-    reserveQuota: async () => ({ kind: "reserved", requestId: "request", status: "reserved" }),
+    reserveQuota: async () => ({
+      kind: "reserved",
+      requestId: "request",
+      status: "reserved",
+      expiresAt: new Date("2040-01-02T03:00:00Z"),
+    }),
     claimForExecution: async () => ({ kind: "claimed", requestId: "request", status: "running" }),
     settleQuota: async () => ({
       kind: "settled",

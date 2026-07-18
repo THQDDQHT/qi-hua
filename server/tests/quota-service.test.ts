@@ -305,6 +305,174 @@ describe("quota claim", () => {
   });
 });
 
+describe("async generation execution fence", () => {
+  test("租约过期后可补投和换执行围栏，旧执行不能结算额度", async () => {
+    const input = reserveInput({
+      requestId: id(70),
+      requestedCount: 1,
+      expiresAt: new Date("2040-01-02T03:00:00Z"),
+      task: {
+        operation: "generation",
+        prompt: "一只猫",
+        size: "1:1",
+        quality: "high",
+      },
+    });
+    const reservation = await service.reserveQuota(input);
+    const firstExecution = id(71);
+    const secondExecution = id(72);
+
+    expect(await repository.findDispatchCandidates({
+      now: new Date("2040-01-02T01:00:00Z"),
+      limit: 10,
+    })).toContainEqual({ requestId: reservation.requestId });
+    await expect(repository.claimTaskExecution({
+      requestId: reservation.requestId,
+      executionId: firstExecution,
+      now: new Date("2040-01-02T01:00:00Z"),
+      leaseUntil: new Date("2040-01-02T01:05:00Z"),
+    })).resolves.toMatchObject({ kind: "claimed", executionId: firstExecution });
+    await expect(repository.claimTaskExecution({
+      requestId: reservation.requestId,
+      executionId: secondExecution,
+      now: new Date("2040-01-02T01:04:00Z"),
+      leaseUntil: new Date("2040-01-02T01:09:00Z"),
+    })).resolves.toEqual({ kind: "busy" });
+    expect(await repository.findDispatchCandidates({
+      now: new Date("2040-01-02T01:04:00Z"),
+      limit: 10,
+    })).not.toContainEqual({ requestId: reservation.requestId });
+    expect(await repository.findDispatchCandidates({
+      now: new Date("2040-01-02T01:05:01Z"),
+      limit: 10,
+    })).toContainEqual({ requestId: reservation.requestId });
+    await expect(repository.claimTaskExecution({
+      requestId: reservation.requestId,
+      executionId: secondExecution,
+      now: new Date("2040-01-02T01:05:01Z"),
+      leaseUntil: new Date("2040-01-02T01:10:01Z"),
+    })).resolves.toMatchObject({ kind: "claimed", executionId: secondExecution });
+
+    const success = [{
+      index: 0,
+      status: "success" as const,
+      filename: `executions/${firstExecution}/0.png`,
+      mimeType: "image/png" as const,
+    }];
+    await expect(repository.settleTaskExecution({
+      requestId: reservation.requestId,
+      executionId: firstExecution,
+      results: success,
+      now: new Date("2040-01-02T01:06:00Z"),
+      resultExpiresAt: new Date("2040-01-03T01:06:00Z"),
+    })).resolves.toEqual({ kind: "stale" });
+    expect(await readCounts(input.clientId, input.ipHash)).toEqual({
+      client: { successCount: 0, reservedCount: 1 },
+      ip: { successCount: 0, reservedCount: 1 },
+    });
+
+    const currentSuccess = [{ ...success[0], filename: `executions/${secondExecution}/0.png` }];
+    await expect(repository.settleTaskExecution({
+      requestId: reservation.requestId,
+      executionId: secondExecution,
+      results: currentSuccess,
+      now: new Date("2040-01-02T01:06:01Z"),
+      resultExpiresAt: new Date("2040-01-03T01:06:01Z"),
+    })).resolves.toEqual({ kind: "settled", status: "completed" });
+    await expect(repository.settleTaskExecution({
+      requestId: reservation.requestId,
+      executionId: secondExecution,
+      results: currentSuccess,
+      now: new Date("2040-01-02T01:06:02Z"),
+      resultExpiresAt: new Date("2040-01-03T01:06:02Z"),
+    })).resolves.toEqual({ kind: "already-settled" });
+    expect(await readCounts(input.clientId, input.ipHash)).toEqual({
+      client: { successCount: 1, reservedCount: 0 },
+      ip: { successCount: 1, reservedCount: 0 },
+    });
+    const [privateInput] = await sql<{
+      operation: string | null;
+      prompt: string | null;
+      size: string | null;
+      quality: string | null;
+      referenceManifest: unknown;
+    }[]>`
+      select operation, prompt, size, quality, reference_manifest as "referenceManifest"
+      from generation_requests where id = ${reservation.requestId}
+    `;
+    expect(privateInput).toEqual({
+      operation: null,
+      prompt: null,
+      size: null,
+      quality: null,
+      referenceManifest: null,
+    });
+    await expect(repository.findTaskForClient({
+      requestId: reservation.requestId,
+      clientId: input.clientId,
+    })).resolves.toMatchObject({
+      requestId: reservation.requestId,
+      status: "completed",
+      resultManifest: currentSuccess,
+    });
+  });
+
+  test("总截止和运行租约相互独立，失租且超过总截止才释放额度", async () => {
+    const input = reserveInput({
+      requestId: id(73),
+      requestedCount: 1,
+      expiresAt: new Date("2040-01-02T01:10:00Z"),
+      task: {
+        operation: "generation",
+        prompt: "一只猫",
+        size: "1:1",
+        quality: "high",
+      },
+    });
+    const reservation = await service.reserveQuota(input);
+    await repository.claimTaskExecution({
+      requestId: reservation.requestId,
+      executionId: id(74),
+      now: new Date("2040-01-02T01:00:00Z"),
+      leaseUntil: new Date("2040-01-02T01:05:00Z"),
+    });
+
+    expect((await readRequest(reservation.requestId))?.status).toBe("running");
+    await service.expireReservations(new Date("2040-01-02T01:05:01Z"));
+    expect((await readRequest(reservation.requestId))?.status).toBe("running");
+    await service.expireReservations(new Date("2040-01-02T01:10:01Z"));
+    expect(await readRequest(reservation.requestId)).toMatchObject({
+      status: "expired",
+      reservedCount: 0,
+    });
+    expect(await readCounts(input.clientId, input.ipHash)).toEqual({
+      client: { successCount: 0, reservedCount: 0 },
+      ip: { successCount: 0, reservedCount: 0 },
+    });
+    const [privateInput] = await sql<{
+      operation: string | null;
+      prompt: string | null;
+      size: string | null;
+      quality: string | null;
+      referenceManifest: unknown;
+    }[]>`
+      select operation, prompt, size, quality, reference_manifest as "referenceManifest"
+      from generation_requests where id = ${reservation.requestId}
+    `;
+    expect(privateInput).toEqual({
+      operation: null,
+      prompt: null,
+      size: null,
+      quality: null,
+      referenceManifest: null,
+    });
+    await expect(repository.findTaskForClient({
+      requestId: reservation.requestId,
+      clientId: input.clientId,
+    })).resolves.toMatchObject({ requestId: reservation.requestId, status: "expired" });
+  });
+});
+
 describe("quota settlement", () => {
   test("全部成功、部分成功和全部失败按实际数量结算", async () => {
     const cases = [

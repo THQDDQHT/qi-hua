@@ -12,6 +12,7 @@ const { sql } = database;
 const migrationsDirectory = resolve(import.meta.dir, "../migrations");
 const historicalMigrationPath = resolve(migrationsDirectory, "001_public_generation.sql");
 const accountingMigrationPath = resolve(migrationsDirectory, "002_generation_request_accounting.sql");
+const asyncMigrationPath = resolve(migrationsDirectory, "003_async_generation_queue.sql");
 const LEGACY_FINGERPRINT = "bbd820b854e9f425110e57a92bfa9d2db1216eda4760dbeef9df9cbcf074f750";
 const REQUEST_ID = "00000000-0000-4000-8000-000000000001";
 const CLIENT_ID = "10000000-0000-4000-8000-000000000001";
@@ -180,6 +181,14 @@ async function runAccountingMigration() {
   );
 }
 
+async function runAsyncMigration() {
+  const source = await readFile(asyncMigrationPath, "utf8");
+  await withMigrationDirectory(
+    { [basename(asyncMigrationPath)]: source },
+    (directory) => runMigrations(sql, directory),
+  );
+}
+
 function insertFinalRequest(overrides: Record<string, unknown> = {}) {
   const row = {
     id: crypto.randomUUID(),
@@ -219,6 +228,7 @@ describe("database migrations", () => {
     expect(migrations.map(({ filename }) => filename)).toEqual([
       "001_public_generation.sql",
       "002_generation_request_accounting.sql",
+      "003_async_generation_queue.sql",
     ]);
 
     const generationColumns = (await schemaSnapshot()).columns
@@ -227,6 +237,9 @@ describe("database migrations", () => {
     expect(generationColumns).toEqual(expect.arrayContaining([
       { columnName: "payload_fingerprint", dataType: "bytea", nullable: "NO" },
       { columnName: "quota_date", dataType: "date", nullable: "NO" },
+      { columnName: "lease_expires_at", dataType: "timestamp with time zone", nullable: "YES" },
+      { columnName: "reference_manifest", dataType: "jsonb", nullable: "YES" },
+      { columnName: "result_manifest", dataType: "jsonb", nullable: "YES" },
     ]));
   });
 
@@ -243,6 +256,7 @@ describe("database migrations", () => {
     expect(migrations.map(({ filename }) => filename)).toEqual([
       "001_public_generation.sql",
       "002_generation_request_accounting.sql",
+      "003_async_generation_queue.sql",
     ]);
   });
 
@@ -348,6 +362,21 @@ describe("database migrations", () => {
         and column_name = 'quota_date'
     `;
     expect(column?.dataType).toBe("text");
+  });
+
+  test("异步迁移为历史 running 请求回填租约截止", async () => {
+    await applyHistoricalMigration();
+    await insertLegacyRequest({ status: "running" });
+    await insertQuotaCandidate("2040-01-02", 1);
+    await runAccountingMigration();
+
+    await runAsyncMigration();
+
+    const [request] = await sql<{ expiresAt: Date; leaseExpiresAt: Date }[]>`
+      select expires_at as "expiresAt", lease_expires_at as "leaseExpiresAt"
+      from generation_requests where id = ${REQUEST_ID}
+    `;
+    expect(request.leaseExpiresAt).toEqual(request.expiresAt);
   });
 
   test("迁移只保留 partial/failed 上的受控错误码", async () => {

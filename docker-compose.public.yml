@@ -8,11 +8,43 @@ services:
       dockerfile: Dockerfile
     env_file:
       - .env.public
+      - ${REDIS_ENV_FILE:?REDIS_ENV_FILE is required}
     expose:
       - "3001"
+    volumes:
+      - type: bind
+        source: ./data/public-generation-temp
+        target: /data/public-generation-temp
+        read_only: false
+        bind:
+          create_host_path: false
     restart: unless-stopped
     networks:
       - public-internal
+      - database
+
+  worker:
+    image: infinite-canvas-public-api:local
+    env_file:
+      - .env.public
+      - ${REDIS_ENV_FILE:?REDIS_ENV_FILE is required}
+    command: ["bun", "src/worker.ts"]
+    volumes:
+      - type: bind
+        source: ./data/public-generation-temp
+        target: /data/public-generation-temp
+        read_only: false
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r=await fetch('http://127.0.0.1:'+process.env.WORKER_HEALTH_PORT+'/health/ready');if(!r.ok)process.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    stop_grace_period: 15m
+    restart: unless-stopped
+    networks:
       - database
 
   web:

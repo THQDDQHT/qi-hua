@@ -8,4 +8,5 @@ description: 当前项目后续值得处理的事项
 本文档用来记录当前项目后续比较值得处理的事项。
 
 - 公众免费生图：服务端、初版生图前端、手机/PWA 和公众部署配置已完成，真实 PostgreSQL 迁移、双容器启动、健康检查和局域网反代基础链路已通过；真实供应商、并发边界、Cloudflare 源站防火墙、测试域名与真机流程仍待验收，详见[公众生图实现状态与外部验收](/docs/progress/public-image-remaining-work)。
+- 公众异步任务恢复：当前刷新或关闭页面不会取消服务端任务，但网页尚未持久化活跃任务编号；后续可使用 `localforage` 保存并恢复同一匿名设备的未完成任务。
 - 本地 Agent 接入后续：按[本地 Agent 接入规划](/docs/progress/local-agent-integration-plan)把 Claude Code CLI Adapter 升级为 Claude Agent SDK Adapter，并完善工具队列体验。

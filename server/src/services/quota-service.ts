@@ -5,6 +5,7 @@ import type {
 } from "../db/quota-repository";
 import { QuotaRepositoryError } from "../db/quota-repository";
 import type {
+  GenerationReferenceManifest,
   RequestStatus,
   SettlementErrorCode,
 } from "../domain/public-generation";
@@ -16,6 +17,7 @@ import {
 } from "./quota-snapshot";
 
 export type ReserveQuotaInput = {
+  requestId?: string;
   clientId: string;
   requestKey: string;
   payloadFingerprint: Uint8Array;
@@ -23,6 +25,13 @@ export type ReserveQuotaInput = {
   quotaDate: string;
   requestedCount: number;
   expiresAt: Date;
+  task?: {
+    operation: "generation" | "edit";
+    prompt: string;
+    size: string;
+    quality: string;
+    referenceManifest?: GenerationReferenceManifest;
+  };
 };
 
 export type Reservation = ReservationRecord;

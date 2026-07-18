@@ -13,5 +13,5 @@ COPY migrations ./migrations
 USER bun
 EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD ["bun", "-e", "const r=await fetch('http://127.0.0.1:3001/health/live');if(!r.ok)process.exit(1)"]
+  CMD ["bun", "-e", "const r=await fetch('http://127.0.0.1:3001/health/ready');if(!r.ok)process.exit(1)"]
 CMD ["bun", "src/index.ts"]

@@ -1,235 +1,293 @@
 import { describe, expect, test } from "bun:test";
 import { PublicGenerationError } from "../src/domain/public-generation";
-import { createGenerationService } from "../src/services/generation-service";
+import {
+  createGenerationApiService,
+  createGenerationWorkerProcessor,
+} from "../src/services/generation-service";
 import type { ImageProvider, ProviderImage } from "../src/services/image-provider";
-import type { GenerationInput } from "../src/services/image-validation";
-import type { QuotaSnapshot } from "../src/services/quota-snapshot";
-import type { createQuotaService } from "../src/services/quota-service";
+import type { GenerationStorage } from "../src/services/generation-storage";
 
-type QuotaService = Pick<
-  ReturnType<typeof createQuotaService>,
-  "reserveQuota" | "claimForExecution" | "settleQuota"
->;
+const requestId = "00000000-0000-4000-8000-000000000001";
+const executionId = "00000000-0000-4000-8000-000000000002";
+const expiresAt = new Date("2040-01-02T08:00:00.000Z");
 
-type QuotaOverrides = Partial<QuotaService>;
-
-const quota: QuotaSnapshot = {
-  limit: 10,
-  used: 2,
-  reserved: 0,
-  remaining: 8,
-  resetAt: "2026-07-14T16:00:00.000Z",
-};
-
-const generation: GenerationInput = {
-  requestKey: "request-key",
-  prompt: "一只猫",
-  count: 1,
-  size: "1:1",
-  quality: "high",
-};
-
-const image: ProviderImage = {
-  mimeType: "image/png",
-  data: "temporary-image-marker",
-};
-
-function fakeQuotaService(overrides: QuotaOverrides = {}): QuotaService {
+function storage(overrides: Partial<GenerationStorage> = {}): GenerationStorage {
   return {
-    reserveQuota: async () => ({ kind: "reserved", requestId: "request-id", status: "reserved" }),
-    claimForExecution: async () => ({ kind: "claimed", requestId: "request-id", status: "running" }),
-    settleQuota: async () => ({ kind: "settled", status: "completed", quota }),
+    writeReference: async () => ({ filename: "reference.png", mimeType: "image/png" }),
+    readReference: async () => new File(["reference"], "reference.png", { type: "image/png" }),
+    writeResult: async (_requestId, execution, index, image) => ({
+      index,
+      status: "success",
+      filename: `executions/${execution}/${index}.png`,
+      mimeType: image.mimeType,
+    }),
+    openResult: async () => Bun.file(import.meta.path),
+    removeRequest: async () => undefined,
+    removeExecution: async () => undefined,
+    checkReady: async () => undefined,
+    findStaleRequestDirectories: async () => [],
     ...overrides,
   };
 }
 
-function fakeProvider(handler: (signal: AbortSignal, index: number) => Promise<ProviderImage> = async () => image) {
-  let calls = 0;
-  const execute = (signal: AbortSignal) => handler(signal, calls++);
-  const provider: ImageProvider = {
-    generateSlot: ({ signal }) => execute(signal),
-    editSlot: ({ signal }) => execute(signal),
+function taskRepository(overrides: Record<string, unknown> = {}) {
+  return {
+    findTaskForClient: async () => undefined,
+    requestExists: async () => false,
+    findDispatchCandidates: async () => [],
+    claimTaskExecution: async () => ({
+      kind: "claimed",
+      executionId,
+      task: {
+        requestId,
+        clientId: "client-id",
+        status: "running",
+        operation: "generation",
+        prompt: "一只猫",
+        requestedCount: 1,
+        size: "1:1",
+        quality: "high",
+        expiresAt,
+      },
+    }),
+    heartbeatTaskExecution: async () => true,
+    abandonTaskExecution: async () => undefined,
+    settleTaskExecution: async () => ({ kind: "settled", status: "completed" }),
+    findArtifactCleanupCandidates: async () => [],
+    markArtifactsDeleted: async () => undefined,
+    ...overrides,
   };
-  return { provider, get calls() { return calls; } };
 }
 
-function service(quotaService: QuotaService, provider: ImageProvider, overrides: { upstreamTimeoutMs?: number } = {}) {
-  return createGenerationService({
-    quotaService,
-    provider,
-    idempotencySecret: "idempotency-test-secret".padEnd(32, "x"),
-    reservationTtlSeconds: 600,
-    upstreamTimeoutMs: overrides.upstreamTimeoutMs ?? 1000,
-    now: () => new Date("2026-07-14T02:00:00.000Z"),
+const generation = {
+  requestKey: "request-key",
+  prompt: "一只猫",
+  count: 1,
+  size: "1:1" as const,
+  quality: "high" as const,
+};
+
+describe("异步任务提交", () => {
+  test("Redis 暂时不可用仍返回已提交到 PostgreSQL 的任务", async () => {
+    const logs: unknown[][] = [];
+    const service = createGenerationApiService({
+      sql: {} as never,
+      repository: taskRepository() as never,
+      quotaService: {
+        reserveQuota: async () => ({
+          kind: "reserved",
+          requestId,
+          status: "reserved",
+          expiresAt,
+        }),
+      },
+      queue: {
+        enqueue: async () => { throw new Error("private redis details"); },
+        ping: async () => "PONG",
+      },
+      storage: storage(),
+      idempotencySecret: "idempotency-test-secret".padEnd(32, "x"),
+      reservationTtlSeconds: 21600,
+      deviceLimit: 10,
+      logger: { error: (...args: unknown[]) => logs.push(args) },
+      now: () => new Date("2040-01-02T02:00:00.000Z"),
+    });
+
+    await expect(service.submit({
+      operation: "generation",
+      generation,
+      references: [],
+      clientId: "client-id",
+      ipHash: new Uint8Array(32),
+      quotaDate: "2040-01-02",
+    })).resolves.toEqual({
+      taskId: requestId,
+      status: "queued",
+      replayed: false,
+      expiresAt: expiresAt.toISOString(),
+    });
+    expect(JSON.stringify(logs)).not.toContain("private redis details");
   });
-}
 
-function execute(
-  quotaService: QuotaService,
-  provider: ImageProvider,
-  input: Partial<GenerationInput> = {},
-  overrides: { upstreamTimeoutMs?: number } = {},
-) {
-  return service(quotaService, provider, overrides).execute({
-    operation: "generation",
-    generation: { ...generation, ...input },
-    references: [],
-    clientId: "client-id",
-    ipHash: new Uint8Array(32).fill(1),
-    quotaDate: "2026-07-14",
+  test("幂等重放删除未采用的候选参考图目录", async () => {
+    const removed: string[] = [];
+    const service = createGenerationApiService({
+      sql: {} as never,
+      repository: taskRepository() as never,
+      quotaService: {
+        reserveQuota: async () => ({ kind: "replay", requestId, status: "running", expiresAt }),
+      },
+      queue: { enqueue: async () => undefined, ping: async () => "PONG" },
+      storage: storage({ removeRequest: async (id) => { removed.push(id); } }),
+      idempotencySecret: "idempotency-test-secret".padEnd(32, "x"),
+      reservationTtlSeconds: 21600,
+      deviceLimit: 10,
+    });
+    const reference = {
+      file: new File(["reference"], "reference.png", { type: "image/png" }),
+      bytes: new Uint8Array([1]),
+      mimeType: "image/png" as const,
+      digest: new Uint8Array(32),
+    };
+
+    const result = await service.submit({
+      operation: "edit",
+      generation,
+      references: [reference],
+      clientId: "client-id",
+      ipHash: new Uint8Array(32),
+      quotaDate: "2040-01-02",
+    });
+
+    expect(result).toMatchObject({ taskId: requestId, status: "running", replayed: true });
+    expect(removed).toHaveLength(1);
+    expect(removed[0]).not.toBe(requestId);
   });
-}
 
-describe("GenerationService", () => {
-  test("预占失败时不领取、不结算也不调用供应商", async () => {
+  test("终态幂等重放直接返回且不再投递 Redis", async () => {
+    let enqueued = 0;
+    const service = createGenerationApiService({
+      sql: {} as never,
+      repository: taskRepository() as never,
+      quotaService: {
+        reserveQuota: async () => ({ kind: "replay", requestId, status: "completed", expiresAt }),
+      },
+      queue: {
+        enqueue: async () => { enqueued++; },
+        ping: async () => "PONG",
+      },
+      storage: storage(),
+      idempotencySecret: "idempotency-test-secret".padEnd(32, "x"),
+      reservationTtlSeconds: 21600,
+      deviceLimit: 10,
+    });
+
+    await expect(service.submit({
+      operation: "generation",
+      generation,
+      references: [],
+      clientId: "client-id",
+      ipHash: new Uint8Array(32),
+      quotaDate: "2040-01-02",
+    })).resolves.toMatchObject({ taskId: requestId, status: "completed", replayed: true });
+    expect(enqueued).toBe(0);
+  });
+});
+
+describe("异步任务执行", () => {
+  test("批次槽严格顺序执行并将供应商失败一起原子结算", async () => {
+    let active = 0;
+    let maximumActive = 0;
+    let calls = 0;
+    const settled: unknown[] = [];
+    const provider: ImageProvider = {
+      generateSlot: async () => {
+        const index = calls++;
+        active++;
+        maximumActive = Math.max(maximumActive, active);
+        await Promise.resolve();
+        active--;
+        if (index === 1) throw new PublicGenerationError("PROVIDER_TIMEOUT");
+        return { mimeType: "image/png", bytes: new Uint8Array([index]) };
+      },
+      editSlot: async () => { throw new Error("unused"); },
+    };
+    const repository = taskRepository({
+      claimTaskExecution: async () => ({
+        kind: "claimed",
+        executionId,
+        task: {
+          requestId,
+          clientId: "client-id",
+          status: "running",
+          operation: "generation",
+          prompt: "一只猫",
+          requestedCount: 3,
+          size: "1:1",
+          quality: "high",
+          expiresAt,
+        },
+      }),
+      settleTaskExecution: async (input: unknown) => {
+        settled.push(input);
+        return { kind: "settled", status: "partial" };
+      },
+    });
+    const process = createGenerationWorkerProcessor({
+      repository: repository as never,
+      provider,
+      storage: storage(),
+      upstreamTimeoutMs: 1000,
+      executionLeaseSeconds: 300,
+      resultTtlSeconds: 86400,
+    });
+
+    await process({ requestId });
+
+    expect(maximumActive).toBe(1);
+    expect(calls).toBe(3);
+    expect(settled).toHaveLength(1);
+    expect(settled[0]).toMatchObject({
+      requestId,
+      results: [
+        { index: 0, status: "success" },
+        { index: 1, status: "failed", errorCode: "PROVIDER_TIMEOUT" },
+        { index: 2, status: "success" },
+      ],
+    });
+  });
+
+  test("执行围栏失效时删除迟到执行目录", async () => {
+    const removed: string[] = [];
+    const provider: ImageProvider = {
+      generateSlot: async (): Promise<ProviderImage> => ({
+        mimeType: "image/png",
+        bytes: new Uint8Array([1]),
+      }),
+      editSlot: async () => { throw new Error("unused"); },
+    };
+    const process = createGenerationWorkerProcessor({
+      repository: taskRepository({
+        settleTaskExecution: async () => ({ kind: "stale" }),
+      }) as never,
+      provider,
+      storage: storage({
+        removeExecution: async (id, execution) => { removed.push(`${id}/${execution}`); },
+      }),
+      upstreamTimeoutMs: 1000,
+      executionLeaseSeconds: 300,
+      resultTtlSeconds: 86400,
+    });
+
+    await process({ requestId });
+
+    expect(removed).toHaveLength(1);
+    expect(removed[0]).toStartWith(`${requestId}/`);
+  });
+});
+
+describe("结果清理", () => {
+  test("到期目录删除成功后才写数据库标记", async () => {
     const calls: string[] = [];
-    const quotaService = fakeQuotaService({
-      reserveQuota: async () => {
-        calls.push("reserve");
-        throw new PublicGenerationError("QUOTA_EXHAUSTED");
-      },
-      claimForExecution: async () => {
-        calls.push("claim");
-        return { kind: "claimed", requestId: "request-id", status: "running" };
-      },
-      settleQuota: async () => {
-        calls.push("settle");
-        return { kind: "settled", status: "failed", quota };
-      },
-    });
-    const provider = fakeProvider();
-
-    await expect(execute(quotaService, provider.provider)).rejects.toMatchObject({ code: "QUOTA_EXHAUSTED" });
-    expect(calls).toEqual(["reserve"]);
-    expect(provider.calls).toBe(0);
-  });
-
-  test("运行中重放不再次领取或调用供应商", async () => {
-    let claims = 0;
-    const quotaService = fakeQuotaService({
-      reserveQuota: async () => ({ kind: "replay", requestId: "request-id", status: "running" }),
-      claimForExecution: async () => {
-        claims++;
-        return { kind: "claimed", requestId: "request-id", status: "running" };
-      },
-    });
-    const provider = fakeProvider();
-
-    await expect(execute(quotaService, provider.provider)).resolves.toEqual({ status: "running", replayed: true });
-    expect(claims).toBe(0);
-    expect(provider.calls).toBe(0);
-  });
-
-  test("终态重放返回空结果和最新额度", async () => {
-    let settlements = 0;
-    const quotaService = fakeQuotaService({
-      reserveQuota: async () => ({ kind: "replay", requestId: "request-id", status: "completed" }),
-      settleQuota: async ({ successCount }) => {
-        settlements++;
-        expect(successCount).toBe(0);
-        return { kind: "already-settled", status: "completed", quota };
-      },
-    });
-    const provider = fakeProvider();
-
-    await expect(execute(quotaService, provider.provider)).resolves.toEqual({
-      status: "completed",
-      replayed: true,
-      results: [],
-      quota,
-    });
-    expect(settlements).toBe(1);
-    expect(provider.calls).toBe(0);
-  });
-
-  test("未取得执行权时不调用供应商", async () => {
-    const quotaService = fakeQuotaService({
-      claimForExecution: async () => ({ kind: "not-claimed", requestId: "request-id", status: "running" }),
-    });
-    const provider = fakeProvider();
-
-    await expect(execute(quotaService, provider.provider)).resolves.toEqual({ status: "running", replayed: true });
-    expect(provider.calls).toBe(0);
-  });
-
-  test("四槽两成功只按两个成功结算", async () => {
-    const settlements: Array<{ successCount: number; errorCode?: string }> = [];
-    const quotaService = fakeQuotaService({
-      settleQuota: async (input) => {
-        settlements.push(input);
-        return { kind: "settled", status: "partial", quota };
-      },
-    });
-    const provider = fakeProvider(async (_signal, index) => {
-      if (index === 1) throw new PublicGenerationError("PROVIDER_REJECTED");
-      if (index === 3) throw new Error("private provider failure");
-      return { ...image, data: `image-${index}` };
+    const service = createGenerationApiService({
+      sql: {} as never,
+      repository: taskRepository({
+        findArtifactCleanupCandidates: async () => [{ requestId }],
+        markArtifactsDeleted: async () => { calls.push("mark"); },
+      }) as never,
+      quotaService: { reserveQuota: async () => { throw new Error("unused"); } },
+      queue: { enqueue: async () => undefined, ping: async () => "PONG" },
+      storage: storage({ removeRequest: async () => { calls.push("delete"); } }),
+      idempotencySecret: "idempotency-test-secret".padEnd(32, "x"),
+      reservationTtlSeconds: 21600,
+      deviceLimit: 10,
     });
 
-    const result = await execute(quotaService, provider.provider, { count: 4 });
-
-    expect(provider.calls).toBe(4);
-    expect(result).toMatchObject({ status: "partial", replayed: false });
-    expect("results" in result && result.results.map(({ index, status }) => ({ index, status }))).toEqual([
-      { index: 0, status: "success" },
-      { index: 1, status: "failed" },
-      { index: 2, status: "success" },
-      { index: 3, status: "failed" },
-    ]);
-    expect(settlements).toHaveLength(1);
-    expect(settlements[0]).toMatchObject({ successCount: 2, errorCode: "SERVICE_UNAVAILABLE" });
-  });
-
-  test("共享超时中止所有槽位后仍完成一次结算", async () => {
-    let settlements = 0;
-    const quotaService = fakeQuotaService({
-      settleQuota: async (input) => {
-        settlements++;
-        expect(input).toMatchObject({ successCount: 0, errorCode: "PROVIDER_TIMEOUT" });
-        return { kind: "settled", status: "failed", quota };
-      },
+    await expect(service.cleanupExpiredArtifacts()).resolves.toEqual({
+      candidates: 1,
+      deleted: 1,
+      orphaned: 0,
     });
-    const provider = fakeProvider((signal) => new Promise((_resolve, reject) => {
-      signal.addEventListener("abort", () => reject(new PublicGenerationError("PROVIDER_TIMEOUT")), { once: true });
-    }));
-
-    const result = await execute(quotaService, provider.provider, { count: 2 }, { upstreamTimeoutMs: 5 });
-
-    expect(settlements).toBe(1);
-    expect(result).toMatchObject({ status: "failed", replayed: false });
-    expect("results" in result && result.results.map((item) => item.status)).toEqual(["failed", "failed"]);
-  });
-
-  test.each([
-    ["already-settled", "completed", "completed"],
-    ["expired", "expired", "failed"],
-  ] as const)("%s 结算不会交付临时图片", async (kind, settlementStatus, responseStatus) => {
-    const quotaService = fakeQuotaService({
-      settleQuota: async () => kind === "expired"
-        ? { kind: "expired", status: "expired", quota }
-        : { kind: "already-settled", status: "completed", quota },
-    });
-    const provider = fakeProvider();
-
-    const result = await execute(quotaService, provider.provider);
-
-    expect(result).toEqual({
-      status: responseStatus,
-      replayed: true,
-      results: [],
-      quota,
-    });
-    expect(JSON.stringify(result)).not.toContain(image.data);
-  });
-
-  test("结算异常时拒绝请求且不泄漏已生成图片", async () => {
-    const quotaService = fakeQuotaService({
-      settleQuota: async () => {
-        throw new Error("private database failure");
-      },
-    });
-    const provider = fakeProvider();
-
-    await expect(execute(quotaService, provider.provider)).rejects.toThrow("private database failure");
+    expect(calls).toEqual(["delete", "mark"]);
   });
 });

@@ -1,6 +1,7 @@
 export type ServerConfig = {
   port: number;
   databaseUrl: string;
+  redisUrl: string;
   aiBaseUrl: string;
   aiApiKey: string;
   aiModel: string;
@@ -14,6 +15,11 @@ export type ServerConfig = {
   timezone: "Asia/Shanghai";
   upstreamTimeoutMs: number;
   reservationTtlSeconds: number;
+  executionLeaseSeconds: number;
+  imageWorkerConcurrency: number;
+  generationStorageDir: string;
+  generationResultTtlSeconds: number;
+  workerHealthPort: number;
 };
 
 type Env = Record<string, string | undefined>;
@@ -60,11 +66,19 @@ export function loadConfig(env: Env): ServerConfig {
   if (port > 65535) throw new Error("PORT must be between 1 and 65535");
 
   let aiBaseUrl: string;
+  let redisUrl: string;
   let publicOrigin: string;
   try {
     aiBaseUrl = new URL(required(env, "AI_BASE_URL")).toString().replace(/\/$/, "");
   } catch {
     throw new Error("AI_BASE_URL must be a valid URL");
+  }
+  try {
+    const parsed = new URL(required(env, "REDIS_URL"));
+    if (parsed.protocol !== "redis:" && parsed.protocol !== "rediss:") throw new Error();
+    redisUrl = parsed.toString();
+  } catch {
+    throw new Error("REDIS_URL must be a valid redis URL");
   }
   try {
     publicOrigin = new URL(required(env, "PUBLIC_ORIGIN")).origin;
@@ -73,14 +87,24 @@ export function loadConfig(env: Env): ServerConfig {
   }
 
   const upstreamTimeoutMs = integer(env, "UPSTREAM_TIMEOUT_MS", 180000);
-  const reservationTtlSeconds = integer(env, "RESERVATION_TTL_SECONDS", 600);
-  if (reservationTtlSeconds * 1000 <= upstreamTimeoutMs + 5000) {
-    throw new Error("RESERVATION_TTL_SECONDS must exceed UPSTREAM_TIMEOUT_MS by at least 5 seconds");
+  const reservationTtlSeconds = integer(env, "RESERVATION_TTL_SECONDS", 21600);
+  const executionLeaseSeconds = integer(env, "EXECUTION_LEASE_SECONDS", 300);
+  if (executionLeaseSeconds * 1000 <= upstreamTimeoutMs + 5000) {
+    throw new Error("EXECUTION_LEASE_SECONDS must exceed UPSTREAM_TIMEOUT_MS by at least 5 seconds");
+  }
+  const imageWorkerConcurrency = integer(env, "IMAGE_WORKER_CONCURRENCY", 5);
+  if (imageWorkerConcurrency > 10) {
+    throw new Error("IMAGE_WORKER_CONCURRENCY must be between 1 and 10");
+  }
+  const generationStorageDir = env.GENERATION_STORAGE_DIR ?? "/data/public-generation-temp";
+  if (!generationStorageDir.startsWith("/")) {
+    throw new Error("GENERATION_STORAGE_DIR must be an absolute path");
   }
 
   return {
     port,
     databaseUrl: required(env, "DATABASE_URL"),
+    redisUrl,
     aiBaseUrl,
     aiApiKey: required(env, "AI_API_KEY"),
     aiModel: required(env, "AI_MODEL"),
@@ -94,5 +118,14 @@ export function loadConfig(env: Env): ServerConfig {
     timezone,
     upstreamTimeoutMs,
     reservationTtlSeconds,
+    executionLeaseSeconds,
+    imageWorkerConcurrency,
+    generationStorageDir,
+    generationResultTtlSeconds: integer(env, "GENERATION_RESULT_TTL_SECONDS", 86400),
+    workerHealthPort: (() => {
+      const value = integer(env, "WORKER_HEALTH_PORT", 3002);
+      if (value > 65535) throw new Error("WORKER_HEALTH_PORT must be between 1 and 65535");
+      return value;
+    })(),
   };
 }

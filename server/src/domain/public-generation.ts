@@ -10,6 +10,8 @@ export const PUBLIC_GENERATION_ERROR_CODES = [
   "PROVIDER_TIMEOUT",
   "SERVICE_UNAVAILABLE",
   "PUBLIC_GENERATION_OFF",
+  "TASK_NOT_FOUND",
+  "RESULT_EXPIRED",
 ] as const;
 
 export type PublicGenerationErrorCode = (typeof PUBLIC_GENERATION_ERROR_CODES)[number];
@@ -39,6 +41,24 @@ export const SETTLEMENT_ERROR_CODES = [
 ] as const;
 
 export type SettlementErrorCode = (typeof SETTLEMENT_ERROR_CODES)[number];
+
+export type GenerationReferenceManifest = {
+  filename: string;
+  mimeType: "image/jpeg" | "image/png" | "image/webp";
+};
+
+export type GenerationResultManifestItem =
+  | {
+      index: number;
+      status: "success";
+      filename: string;
+      mimeType: "image/jpeg" | "image/png" | "image/webp";
+    }
+  | {
+      index: number;
+      status: "failed";
+      errorCode: SettlementErrorCode;
+    };
 
 const SETTLEMENT_ERROR_PRIORITY: Record<SettlementErrorCode, number> = {
   PROVIDER_REJECTED: 1,

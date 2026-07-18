@@ -12,6 +12,7 @@ const databaseUrl = process.env.TEST_DATABASE_URL!;
 const config: ServerConfig = {
   port: 3001,
   databaseUrl,
+  redisUrl: "redis://localhost:6379",
   aiBaseUrl: "https://provider.example.com",
   aiApiKey: "provider-secret",
   aiModel: "private-model-name",
@@ -24,7 +25,12 @@ const config: ServerConfig = {
   dailyIpLimit: 30,
   timezone: "Asia/Shanghai",
   upstreamTimeoutMs: 180000,
-  reservationTtlSeconds: 600,
+  reservationTtlSeconds: 21600,
+  executionLeaseSeconds: 300,
+  imageWorkerConcurrency: 5,
+  generationStorageDir: "/tmp/infinite-canvas-test",
+  generationResultTtlSeconds: 86400,
+  workerHealthPort: 3002,
 };
 const app = createApp({ config, sql });
 const trackedTokens = new Set<string>();
