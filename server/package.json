@@ -3,7 +3,8 @@
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
     "test": "bun test",
-    "migrate": "bun src/db/migrate.ts"
+    "migrate": "bun src/db/migrate.ts",
+    "sync:prompt-library": "PROMPT_LIBRARY_DIR=../data/prompt-library bun ../deploy/public/scripts/sync-prompt-library.ts"
   },
   "dependencies": {
     "file-type": "^22.0.1",

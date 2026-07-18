@@ -13,3 +13,20 @@ description: 当前已接入同步逻辑的第三方提示词仓库
 | https://github.com/YouMind-OpenLab/awesome-gpt-image-2 | 已实现同步逻辑 |
 | https://github.com/YouMind-OpenLab/awesome-nano-banana-pro-prompts | 已实现同步逻辑 |
 | https://github.com/davidwuw0811-boop/awesome-gpt-image2-prompts | 已实现同步逻辑 |
+
+## 公众部署本地快照
+
+公众模式不让每位访客直接下载第三方原图。同步工具会在具备稳定外网访问的机器上读取上述来源，把有效封面转成 640 × 480 的 WebP 文件，并与同一批提示词清单一起写入被忽略的 `data/prompt-library/`：
+
+```bash
+cd server
+bun run sync:prompt-library
+```
+
+图片文件不会提交到 Git，也不会复制进 Docker 镜像。将数据目录单独同步到服务器后，由 Nginx 通过 `/prompt-library/` 提供同源访问：
+
+```bash
+rsync -az -e 'ssh -p 端口' ../data/prompt-library/ 用户@服务器:/项目目录/data/prompt-library/
+```
+
+提示词清单不做长缓存；封面使用内容摘要文件名并缓存一年。同步失败不会替换现有清单，旧摘要图片也会保留，避免仍在使用旧清单的浏览器出现图片失效。

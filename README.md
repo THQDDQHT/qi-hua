@@ -36,7 +36,7 @@
 - 画布助手：围绕选中节点和上游节点对话、生图，并把结果插回画布。
 - 本地 Agent：通过本机 Canvas Agent 连接 Codex / Claude Code，让 Agent 通过 MCP 操作当前画布；
 - Codex App 插件：提供 Codex app 插件，安装后会自动注册 MCP 并尝试拉起本地 Agent。
-- 提示词库：浏览器前端直连多个 GitHub 开源项目，并缓存到 IndexedDB。
+- 提示词库：公众部署使用服务器本地 WebP 快照，自部署模式可继续直连多个开源提示词项目。
 
 完整功能说明见 [功能介绍](docs/content/docs/overview/features.mdx)。
 

@@ -68,14 +68,38 @@ Nginx 的 [`cloudflare-trusted.conf`](https://github.com/basketikun/infinite-can
 ./deploy/public/scripts/check-public-config.sh
 ```
 
-该检查执行 `docker compose config --quiet`，不会启动、构建或部署服务。`docker-compose.public.yml` 使用两个服务：
+该检查执行 `docker compose config --quiet`，不会启动、构建或部署服务。`docker-compose.public.yml` 使用两个常驻服务和一个维护服务：
 
 - `api`：无 `ports`，只有 `expose: 3001`，同时加入前端私有网络和既有数据库网络，并使用 `server/Dockerfile` 的存活探针。
 - `web`：以 `VITE_APP_MODE=public` 构建，唯一映射 `${PUBLIC_WEB_PORT}:443`；Nginx 将 `/api/`、`/health/` 转发到 `api:3001`。
+- `prompt-sync`：仅在 `maintenance` profile 下运行，下载第三方提示词封面并生成本地 WebP 快照，不连接数据库，也不常驻运行。
 
 只有 `api` 加入数据库网络。不要把 `web` 加入该网络，也不要为了容器连接继续将 PostgreSQL 端口映射到所有宿主地址。
 
 Nginx 对两个图片写接口设置每真实来源地址 `5r/m`、`burst=2 nodelay`，并将经过 Cloudflare 可信地址规则还原后的 `$remote_addr` 传给 API；局域网直连时该值就是实际连接地址。请求体上限 22 MB、上游读超时 190 秒，并禁止 API 和健康响应缓存。`index.html` 不做长缓存，带哈希的静态文件缓存一年。CSP 明确允许 `img-src blob:`，以支持本地图片预览。
+
+## 同步提示词本地快照
+
+首次启动 Web 容器前，先在能够稳定访问第三方图片来源的机器生成本地快照：
+
+```bash
+cd server
+bun run sync:prompt-library
+```
+
+同步器会下载有效封面、转换为 640 × 480 WebP，并将提示词清单和图片写到仓库根目录的 `data/prompt-library/`。`data/` 已被 Git 和 Docker 构建上下文忽略。若生成快照的机器不是部署服务器，使用 `rsync` 单独传输该目录；不要把图片加入 Git：
+
+```bash
+rsync -az -e 'ssh -p 端口' ../data/prompt-library/ 用户@服务器:/项目目录/data/prompt-library/
+```
+
+服务器本身能够稳定访问所有图片来源时，也可运行维护容器：
+
+```bash
+docker compose --profile maintenance --env-file .env.public -f docker-compose.public.yml run --rm --build prompt-sync
+```
+
+确认 `data/prompt-library/prompts.json` 存在后再启动或重建 `web`。Web 容器只读挂载该目录；提示词清单不做长缓存，带内容摘要的封面缓存一年。
 
 ## 上线与回滚顺序
 
@@ -84,21 +108,22 @@ Nginx 对两个图片写接口设置每真实来源地址 `5r/m`、`burst=2 node
 1. 保持 `PUBLIC_GENERATION_ENABLED=false` 并备份数据库。
 2. 审阅 `.env.public`、Cloudflare DNS/TLS 和源站防火墙规则；确认不能通过源站 IP 绕过 Cloudflare。
 3. 运行配置检查。
-4. 显式执行迁移：
+4. 同步提示词本地快照，并确认 `prompts.json` 与 `covers/` 已写入服务器 `data/prompt-library/`。
+5. 显式执行迁移：
 
    ```bash
    ./deploy/public/scripts/migrate-public.sh
    ```
 
-5. 启动 Compose 服务后，通过 Cloudflare 域名运行不写图片接口的 smoke 检查：
+6. 启动 Compose 服务后，通过 Cloudflare 域名运行不写图片接口的 smoke 检查：
 
    ```bash
    PUBLIC_ORIGIN=https://canvas.example.com ./deploy/public/scripts/smoke-public.sh
    ```
 
-6. 由内部账号生成一张图片，核对额度账务、429 限流、错误日志和供应商余额。
-7. 再次验证源站不可绕过；确认生产日志没有 Cookie、提示词、图片、明文 IP、连接串、密钥或供应商响应正文。
-8. 仅在上述检查完成后，将 `PUBLIC_GENERATION_ENABLED=true`，再重建并滚动更新 `api`。
+7. 由内部账号生成一张图片，核对额度账务、429 限流、错误日志和供应商余额。
+8. 再次验证源站不可绕过；确认生产日志没有 Cookie、用户提示词、用户图片、明文 IP、连接串、密钥或供应商响应正文。
+9. 仅在上述检查完成后，将 `PUBLIC_GENERATION_ENABLED=true`，再重建并滚动更新 `api`。
 
 止损或回滚时，优先将 `PUBLIC_GENERATION_ENABLED=false` 并仅更新 `api`。不要删除已应用的向后兼容数据库迁移，也不要通过删除数据恢复服务。
 

@@ -30,5 +30,23 @@ COPY deploy/public/nginx/security-headers.conf /etc/nginx/includes/security-head
 
 EXPOSE 443
 
+# 维护镜像：抓取第三方提示词封面并生成服务器本地提示词库。
+FROM oven/bun:1.3.13 AS prompt-sync-dependencies
+
+WORKDIR /app
+COPY server/package.json server/bun.lock ./
+RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile --production --cache-dir=/root/.bun/install/cache
+
+FROM oven/bun:1.3.13 AS prompt-sync
+
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=prompt-sync-dependencies /app/node_modules ./node_modules
+COPY server/package.json server/bun.lock ./
+COPY web/src/services/api/prompt-sources.ts ./web/src/services/api/prompt-sources.ts
+COPY deploy/public/scripts/sync-prompt-library.ts ./deploy/public/scripts/sync-prompt-library.ts
+
+CMD ["bun", "deploy/public/scripts/sync-prompt-library.ts"]
+
 # 默认目标保持现有自部署静态前端行为。
 FROM self-hosted-base AS self-hosted-web

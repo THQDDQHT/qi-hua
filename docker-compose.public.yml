@@ -37,7 +37,27 @@ services:
         source: ${PUBLIC_TLS_KEY_PATH:?PUBLIC_TLS_KEY_PATH is required}
         target: /etc/nginx/tls/origin.key
         read_only: true
+      - type: bind
+        source: ./data/prompt-library
+        target: /usr/share/nginx/html/prompt-library
+        read_only: true
     restart: unless-stopped
+    networks:
+      - public-internal
+
+  prompt-sync:
+    image: infinite-canvas-prompt-sync:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: prompt-sync
+    profiles:
+      - maintenance
+    volumes:
+      - type: bind
+        source: ./data/prompt-library
+        target: /data/prompt-library
+    restart: "no"
     networks:
       - public-internal
 

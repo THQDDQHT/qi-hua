@@ -49,4 +49,4 @@ docker compose -f docker-compose.local.yml up -d --build
 
 ## 数据说明
 
-当前主应用镜像只启动 Next.js。画布、我的素材、生成记录和 AI API Key 默认保存在浏览器本地；第三方提示词由浏览器前端直连拉取，不需要额外挂载数据目录。
+当前主应用镜像使用 Nginx 提供 Vite 静态文件。画布、我的素材、生成记录和 AI API Key 默认保存在浏览器本地；普通自部署模式的第三方提示词仍由浏览器前端直连拉取。公众部署会把压缩后的提示词封面和清单保存到服务器 `data/prompt-library/`，该目录不进入 Git 或 Docker 镜像，并以只读方式挂载给 Web 容器。
