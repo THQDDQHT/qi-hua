@@ -26,6 +26,8 @@ Cloudflare -> web/Nginx -> api/Bun -> 既有 PostgreSQL
 
 在 DNS、严格 TLS 与源站防火墙条件未同时满足前，不要公开启动此入口，也不要把 `PUBLIC_GENERATION_ENABLED` 设为 `true`。
 
+仅在受控局域网联调时，可以临时将 `PUBLIC_ORIGIN` 设置为服务器的 HTTPS IP 地址并使用带对应 IP SAN 的自签名证书。Nginx 会把经过可信代理规则处理后的 `$remote_addr` 传给 API；此方式不等同于公网部署验收，浏览器也会提示证书不受信任。
+
 ## 准备配置
 
 从模板创建运行时配置，保存在仓库根目录：
@@ -73,7 +75,7 @@ Nginx 的 [`cloudflare-trusted.conf`](https://github.com/basketikun/infinite-can
 
 只有 `api` 加入数据库网络。不要把 `web` 加入该网络，也不要为了容器连接继续将 PostgreSQL 端口映射到所有宿主地址。
 
-Nginx 对两个图片写接口设置每真实来源地址 `5r/m`、`burst=2 nodelay`，请求体上限 22 MB、上游读超时 190 秒，并禁止 API 和健康响应缓存。`index.html` 不做长缓存，带哈希的静态文件缓存一年。CSP 明确允许 `img-src blob:`，以支持本地图片预览。
+Nginx 对两个图片写接口设置每真实来源地址 `5r/m`、`burst=2 nodelay`，并将经过 Cloudflare 可信地址规则还原后的 `$remote_addr` 传给 API；局域网直连时该值就是实际连接地址。请求体上限 22 MB、上游读超时 190 秒，并禁止 API 和健康响应缓存。`index.html` 不做长缓存，带哈希的静态文件缓存一年。CSP 明确允许 `img-src blob:`，以支持本地图片预览。
 
 ## 上线与回滚顺序
 
