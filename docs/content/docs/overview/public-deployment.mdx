@@ -20,7 +20,7 @@ Cloudflare -> web/Nginx -> api/Bun -> BullMQ/Redis -> worker/Bun -> 图片供应
 ## 部署前条件
 
 - Cloudflare 已为域名开启代理（橙云）并启用 **Full (strict)** TLS。
-- 使用本机 Cloudflare Tunnel 时，公开主机名的服务地址必须指向 `https://127.0.0.1:443`；不要指向其他局域网地址。Nginx 只额外信任本机回环代理传来的 `CF-Connecting-IP`，不会信任整个局域网。
+- 使用本机 Cloudflare Tunnel 时，公开主机名的服务地址必须指向 `.env.public` 中配置的精确宿主地址和端口，例如 `https://192.168.31.28:7777`。不要填写 `0.0.0.0`，也不要信任整个局域网或 Docker 网段。
 - 机器已有 PostgreSQL，且创建了仅授予本应用所需迁移和运行权限的独立数据库账号。
 - PostgreSQL 和健康的 `redis_shared` 已加入外部网络 `app_shared_net`，并分别配置了稳定别名；公众 API 和 worker 会加入该网络，前端容器不会加入。
 - Redis 已创建非管理账号 `infinite_canvas`，业务环境文件只包含该账号的 `REDIS_URL` 和固定的 `REDIS_PREFIX=infinite-canvas`。
@@ -43,7 +43,8 @@ cp .env.public.example .env.public
 
 至少填写：
 
-- `PUBLIC_WEB_PORT`：通常为 `443`；这是 `web` 的唯一宿主端口。
+- `PUBLIC_WEB_BIND_IP`：Web 只绑定并信任的精确宿主地址；Tunnel 使用局域网地址回连时填写服务器局域网 IP，不能填写 `0.0.0.0`。
+- `PUBLIC_WEB_PORT`：Web 的唯一宿主端口，例如 `7777`；容器内部仍使用 `443`。
 - `PUBLIC_TLS_CERT_PATH`、`PUBLIC_TLS_KEY_PATH`：Origin Certificate 与私钥的绝对路径。
 - `PUBLIC_ORIGIN`：例如 `https://canvas.example.com`，必须与浏览器 Origin 完全一致。
 - `DATABASE_DOCKER_NETWORK`：既有 PostgreSQL 容器所在的 Docker 网络名称。该网络由外部维护，Compose 不会创建或删除。
@@ -83,12 +84,12 @@ Nginx 的 [`cloudflare-trusted.conf`](https://github.com/basketikun/infinite-can
 
 - `api`：无 `ports`，只有 `expose: 3001`，同时加入前端私有网络和 `app_shared_net`，加载应用与 Redis 两份环境文件，并读写共享临时图片目录。
 - `worker`：复用 API 镜像，以 `bun src/worker.ts` 启动；只加入 `app_shared_net`，不开放端口，使用内部 3002 健康接口，并与 API 读写同一临时目录。
-- `web`：以 `VITE_APP_MODE=public` 构建，唯一映射 `${PUBLIC_WEB_PORT}:443`；Nginx 将 `/api/`、`/health/` 转发到 `api:3001`。
+- `web`：以 `VITE_APP_MODE=public` 构建，唯一映射 `${PUBLIC_WEB_BIND_IP}:${PUBLIC_WEB_PORT}:443`；Nginx 将 `/api/`、`/health/` 转发到 `api:3001`。
 - `prompt-sync`：仅在 `maintenance` profile 下运行，下载第三方提示词封面并生成本地 WebP 快照，不连接数据库，也不常驻运行。
 
 只有 API 和 worker 加入外部共享网络。不要把 `web` 加入该网络，也不要为了容器连接将 PostgreSQL 或 Redis 端口映射到宿主地址。
 
-Nginx 对两个图片写接口设置每真实来源地址 `5r/m`、`burst=2 nodelay`，并将经过 Cloudflare 可信地址规则还原后的 `$remote_addr` 传给 API；局域网直连时该值就是实际连接地址，本机 Tunnel 回连时只信任 `127.0.0.1` / `::1`。请求体上限 22 MB，并禁止 API 和健康响应缓存。`index.html` 不做长缓存，带哈希的静态文件缓存一年。CSP 明确允许 `img-src blob:`，以支持本地图片预览。
+Nginx 对两个图片写接口设置每真实来源地址 `5r/m`、`burst=2 nodelay`，并将经过 Cloudflare 可信地址规则还原后的 `$remote_addr` 传给 API；本机 Tunnel 回连时只额外信任 `PUBLIC_WEB_BIND_IP` 对应的单个地址以及回环地址，不会信任整个局域网。请求体上限 22 MB，并禁止 API 和健康响应缓存。`index.html` 不做长缓存，带哈希的静态文件缓存一年。CSP 明确允许 `img-src blob:`，以支持本地图片预览。
 
 ## 异步任务与临时结果
 
