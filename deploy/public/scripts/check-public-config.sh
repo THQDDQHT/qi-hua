@@ -10,7 +10,7 @@ env_file="$root_dir/.env.public"
   exit 1
 }
 
-required_vars='PUBLIC_WEB_BIND_IP PUBLIC_WEB_PORT PUBLIC_TLS_CERT_PATH PUBLIC_TLS_KEY_PATH PUBLIC_ORIGIN DATABASE_DOCKER_NETWORK DATABASE_URL REDIS_ENV_FILE AI_BASE_URL AI_API_KEY AI_MODEL ANON_TOKEN_SECRET IP_HASH_SECRET IDEMPOTENCY_SECRET TIMEZONE PUBLIC_GENERATION_ENABLED UPSTREAM_TIMEOUT_MS RESERVATION_TTL_SECONDS EXECUTION_LEASE_SECONDS IMAGE_WORKER_CONCURRENCY GENERATION_STORAGE_DIR GENERATION_RESULT_TTL_SECONDS WORKER_HEALTH_PORT'
+required_vars='PUBLIC_WEB_BIND_IP PUBLIC_WEB_PORT PUBLIC_ORIGIN DATABASE_DOCKER_NETWORK DATABASE_URL REDIS_ENV_FILE AI_BASE_URL AI_API_KEY AI_MODEL ANON_TOKEN_SECRET IP_HASH_SECRET IDEMPOTENCY_SECRET TIMEZONE PUBLIC_GENERATION_ENABLED UPSTREAM_TIMEOUT_MS RESERVATION_TTL_SECONDS EXECUTION_LEASE_SECONDS IMAGE_WORKER_CONCURRENCY GENERATION_STORAGE_DIR GENERATION_RESULT_TTL_SECONDS WORKER_HEALTH_PORT'
 for name in $required_vars; do
   value=$(grep -E "^${name}=" "$env_file" | tail -n 1 | cut -d= -f2- || true)
   [ -n "$value" ] || {
@@ -95,15 +95,6 @@ docker network inspect "$DATABASE_DOCKER_NETWORK" >/dev/null 2>&1 || {
 redis_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' redis_shared 2>/dev/null || true)
 [ "$redis_health" = "healthy" ] || {
   printf '%s\n' 'redis_shared must be running and healthy.' >&2
-  exit 1
-}
-
-[ -f "$PUBLIC_TLS_CERT_PATH" ] || {
-  printf 'TLS certificate not found: %s\n' "$PUBLIC_TLS_CERT_PATH" >&2
-  exit 1
-}
-[ -f "$PUBLIC_TLS_KEY_PATH" ] || {
-  printf 'TLS key not found: %s\n' "$PUBLIC_TLS_KEY_PATH" >&2
   exit 1
 }
 

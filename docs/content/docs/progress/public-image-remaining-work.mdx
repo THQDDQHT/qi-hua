@@ -402,13 +402,13 @@ Cloudflare -> web/Nginx -> api/Bun -> BullMQ/redis_shared -> worker/Bun -> 图�
 
 ### Cloudflare 和源站保护
 
-只有在源站防火墙限制为 Cloudflare 官方地址段后，应用才能信任公网代理传来的 `CF-Connecting-IP`。本机 Cloudflare Tunnel 必须回连 `.env.public` 中配置的精确宿主地址和端口；Nginx 只额外信任该单个地址与回环地址，不能信任整个局域网或 Docker 网段。
+公网 HTTPS 由 Cloudflare 提供。本机 Cloudflare Tunnel 必须通过 HTTP 回连 `.env.public` 中配置的精确宿主地址和端口；Nginx 只额外信任该单个地址与回环地址，不能信任整个局域网或 Docker 网段。
 
 必须满足：
 
-- Cloudflare 代理开启并使用严格 TLS。
-- 源站 80/443 仅允许 Cloudflare 官方 IPv4/IPv6 地址段。
-- Nginx 仅信任这些网段并恢复真实来源地址。
+- Cloudflare Tunnel 已为域名提供公网 HTTPS。
+- 源站 HTTP 端口只绑定 Tunnel 使用的精确本机地址，不绑定 `0.0.0.0` 或公网地址。
+- Nginx 仅信任精确的 Tunnel 来源地址并恢复真实来源地址。
 - SSH 和 PostgreSQL 不向公网开放。
 - 不能通过源站 IP 绕过 Cloudflare。
 
@@ -480,7 +480,7 @@ proxy_read_timeout 190s;
 1. 由 CI 运行完整 PostgreSQL 服务端测试、镜像构建、Compose 展开和 Nginx 语法检查。
 2. 在受控环境验证真实供应商协议、余额、限流和错误映射。
 3. 在测试域名执行数据库/Redis 失败、浏览器停止轮询、执行租约丢失、迟到结果和 API/worker 容器重启恢复。
-4. 配置 Cloudflare Full (strict) 与源站防火墙，确认无法绕过代理。
+4. 配置 Cloudflare Tunnel HTTP 源站路由与宿主端口限制，确认无法从公网绕过代理。
 5. 完成 iPhone Safari 和 Android Chrome 生图流程回归。
 6. 保持 `PUBLIC_GENERATION_ENABLED=false` 小范围试运行，核对账务和日志后再开放生成。
 

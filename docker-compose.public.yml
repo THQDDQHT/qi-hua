@@ -61,16 +61,8 @@ services:
     extra_hosts:
       - "tunnel-origin=${PUBLIC_WEB_BIND_IP:?PUBLIC_WEB_BIND_IP is required}"
     ports:
-      - "${PUBLIC_WEB_BIND_IP:?PUBLIC_WEB_BIND_IP is required}:${PUBLIC_WEB_PORT:?PUBLIC_WEB_PORT is required}:443"
+      - "${PUBLIC_WEB_BIND_IP:?PUBLIC_WEB_BIND_IP is required}:${PUBLIC_WEB_PORT:?PUBLIC_WEB_PORT is required}:80"
     volumes:
-      - type: bind
-        source: ${PUBLIC_TLS_CERT_PATH:?PUBLIC_TLS_CERT_PATH is required}
-        target: /etc/nginx/tls/origin.crt
-        read_only: true
-      - type: bind
-        source: ${PUBLIC_TLS_KEY_PATH:?PUBLIC_TLS_KEY_PATH is required}
-        target: /etc/nginx/tls/origin.key
-        read_only: true
       - type: bind
         source: ./data/prompt-library
         target: /usr/share/nginx/html/prompt-library

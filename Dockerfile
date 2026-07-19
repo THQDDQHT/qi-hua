@@ -28,7 +28,7 @@ COPY deploy/public/nginx/cloudflare-trusted.conf /etc/nginx/includes/cloudflare-
 COPY deploy/public/nginx/proxy-public.conf /etc/nginx/includes/proxy-public.conf
 COPY deploy/public/nginx/security-headers.conf /etc/nginx/includes/security-headers.conf
 
-EXPOSE 443
+EXPOSE 80
 
 # 维护镜像：抓取第三方提示词封面并生成服务器本地提示词库。
 FROM oven/bun:1.3.13 AS prompt-sync-dependencies
