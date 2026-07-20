@@ -44,6 +44,7 @@ cp .env.public.example .env.public
 
 - `PUBLIC_WEB_BIND_IP`：Web 只绑定并信任的精确宿主地址；Tunnel 使用局域网地址回连时填写服务器局域网 IP，不能填写 `0.0.0.0`。
 - `PUBLIC_WEB_PORT`：Web 的唯一宿主端口，例如 `7777`；容器内部使用 HTTP `80`。
+- `PUBLIC_WEB_HOST`：唯一允许访问 Web 的公开主机名，不带协议、端口或路径，例如 `canvas.example.com`。其他 `Host` 会由 Nginx 直接返回 `403`。
 - `PUBLIC_ORIGIN`：例如 `https://canvas.example.com`，必须与浏览器 Origin 完全一致。
 - `DATABASE_DOCKER_NETWORK`：既有 PostgreSQL 容器所在的 Docker 网络名称。该网络由外部维护，Compose 不会创建或删除。
 - `DATABASE_URL`：连接到**既有** PostgreSQL 的生产专用最小权限账号；主机名使用 PostgreSQL 在上述网络中的别名，例如 `postgres`。
@@ -84,12 +85,12 @@ Compose 会把 `PUBLIC_WEB_BIND_IP` 以 `tunnel-origin` 主机名注入 Web 容�
 
 - `api`：无 `ports`，只有 `expose: 3001`，同时加入前端私有网络和 `app_shared_net`，加载应用与 Redis 两份环境文件，并读写共享临时图片目录。
 - `worker`：复用 API 镜像，以 `bun src/worker.ts` 启动；只加入 `app_shared_net`，不开放端口，使用内部 3002 健康接口，并与 API 读写同一临时目录。
-- `web`：以 `VITE_APP_MODE=public` 构建，唯一映射 `${PUBLIC_WEB_BIND_IP}:${PUBLIC_WEB_PORT}:80`；Nginx 将 `/api/`、`/health/` 转发到 `api:3001`。
+- `web`：以 `VITE_APP_MODE=public` 构建，唯一映射 `${PUBLIC_WEB_BIND_IP}:${PUBLIC_WEB_PORT}:80`；Nginx 只接受 `PUBLIC_WEB_HOST`，并将该域名下的 `/api/`、`/health/` 转发到 `api:3001`。
 - `prompt-sync`：仅在 `maintenance` profile 下运行，下载第三方提示词封面并生成本地 WebP 快照，不连接数据库，也不常驻运行。
 
 只有 API 和 worker 加入外部共享网络。不要把 `web` 加入该网络，也不要为了容器连接将 PostgreSQL 或 Redis 端口映射到宿主地址。
 
-Nginx 对两个图片写接口设置每真实来源地址 `5r/m`、`burst=2 nodelay`，并将经过 Cloudflare 可信地址规则还原后的 `$remote_addr` 传给 API；本机 Tunnel 回连时只额外信任 `PUBLIC_WEB_BIND_IP` 对应的单个地址以及回环地址，不会信任整个局域网。请求体上限 22 MB，并禁止 API 和健康响应缓存。`index.html` 不做长缓存，带哈希的静态文件缓存一年。CSP 明确允许 `img-src blob:`，以支持本地图片预览。
+Nginx 对非 `PUBLIC_WEB_HOST` 的请求统一返回 `403`。对两个图片写接口设置每真实来源地址 `5r/m`、`burst=2 nodelay`，并将经过 Cloudflare 可信地址规则还原后的 `$remote_addr` 传给 API；本机 Tunnel 回连时只额外信任 `PUBLIC_WEB_BIND_IP` 对应的单个地址以及回环地址，不会信任整个局域网。请求体上限 22 MB，并禁止 API 和健康响应缓存。`index.html` 不做长缓存，带哈希的静态文件缓存一年。CSP 明确允许 `img-src blob:`，以支持本地图片预览。
 
 ## 异步任务与临时结果
 

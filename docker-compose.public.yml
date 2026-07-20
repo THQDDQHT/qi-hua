@@ -58,6 +58,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    environment:
+      PUBLIC_WEB_HOST: ${PUBLIC_WEB_HOST:?PUBLIC_WEB_HOST is required}
     extra_hosts:
       - "tunnel-origin=${PUBLIC_WEB_BIND_IP:?PUBLIC_WEB_BIND_IP is required}"
     ports:

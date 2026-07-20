@@ -23,7 +23,7 @@ EXPOSE 3000
 FROM nginx:1.27-alpine AS public-web
 
 COPY --from=web-build /app/web/dist /usr/share/nginx/html
-COPY deploy/public/nginx/public.conf /etc/nginx/conf.d/default.conf
+COPY deploy/public/nginx/public.conf /etc/nginx/templates/default.conf.template
 COPY deploy/public/nginx/cloudflare-trusted.conf /etc/nginx/includes/cloudflare-trusted.conf
 COPY deploy/public/nginx/proxy-public.conf /etc/nginx/includes/proxy-public.conf
 COPY deploy/public/nginx/security-headers.conf /etc/nginx/includes/security-headers.conf
