@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { createImageGenerationFacade } from "../src/services/image-generation";
+import { createImageGenerationFacade, type PublicImageGenerationTask } from "../src/services/image-generation";
 
 const quota = {
     limit: 10,
@@ -54,11 +54,13 @@ function pathOf(input: RequestInfo | URL) {
 
 {
     let getCalls = 0;
+    let createdTask: PublicImageGenerationTask | undefined;
     const facade = publicFacade((async (input, init) => {
         const path = pathOf(input);
         if (init?.method === "POST") {
             return Response.json({ taskId: "async-task", status: "queued", replayed: false, expiresAt: "2099-01-01T00:00:00.000Z", pollAfterMs: 0 }, { status: 202 });
         }
+        assert.ok(createdTask, "轮询前应先暴露任务编号供页面持久化");
         assert.equal(path, "/api/images/tasks/async-task");
         getCalls += 1;
         if (getCalls === 1) return Response.json({ taskId: "async-task", status: "queued", pollAfterMs: 0 });
@@ -71,8 +73,15 @@ function pathOf(input: RequestInfo | URL) {
         });
     }) as typeof fetch);
 
-    const batch = await facade.generateImages(generationInput);
+    const batch = await facade.generateImages({
+        ...generationInput,
+        onTaskCreated: async (task) => {
+            await Promise.resolve();
+            createdTask = task;
+        },
+    });
     assert.equal(getCalls, 3, "异步协议持续查询至终态");
+    assert.deepEqual(createdTask, { taskId: "async-task", requestKey: "request-key", expiresAt: "2099-01-01T00:00:00.000Z" });
     assert.equal(batch.results[0]?.image?.dataUrl, "data:image/webp;base64,BAUG");
     assert.equal(batch.replayed, false, "提交响应的重放标记传递到最终结果");
 }

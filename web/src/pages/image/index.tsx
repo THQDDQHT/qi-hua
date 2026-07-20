@@ -12,7 +12,7 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { appMode } from "@/lib/app-mode";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { assertImageGenerationReferenceLimit, IMAGE_GENERATION_REFERENCE_LIMIT, normalizeImageGenerationCount, selectImageGenerationReferences } from "@/lib/image-generation-policy";
-import { generateImages, generateSingleImage, type GeneratedImageResult } from "@/services/image-generation";
+import { generateImages, generateSingleImage, resumePublicGeneration, type GeneratedImageResult, type GenerationBatch, type PublicImageGenerationTask } from "@/services/image-generation";
 import { usePublicSessionStore } from "@/stores/use-public-session-store";
 import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -56,7 +56,9 @@ type GenerationLog = {
     imageCount: number;
     size: string;
     quality: string;
-    status: "成功" | "失败";
+    status: "生成中" | "成功" | "失败";
+    task?: Omit<PublicImageGenerationTask, "taskId"> & { taskId?: string };
+    error?: string;
     images: GeneratedImage[];
     thumbnails: string[];
 };
@@ -72,6 +74,8 @@ const logStore = localforage.createInstance({ name: "infinite-canvas", storeName
 export default function ImagePage() {
     const { message } = App.useApp();
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const generationControllersRef = useRef(new Map<string, AbortController>());
+    const mountedRef = useRef(true);
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
@@ -129,7 +133,13 @@ export default function ImagePage() {
     }, [running, startedAt]);
 
     useEffect(() => {
+        mountedRef.current = true;
         void refreshLogs();
+        return () => {
+            mountedRef.current = false;
+            generationControllersRef.current.forEach((controller) => controller.abort());
+            generationControllersRef.current.clear();
+        };
     }, []);
 
     const remainingReferenceSlots = Math.max(0, IMAGE_GENERATION_REFERENCE_LIMIT - references.length);
@@ -203,50 +213,38 @@ export default function ImagePage() {
         const batchStartedAt = performance.now();
         setStartedAt(batchStartedAt);
 
+        if (publicMode) {
+            const log = buildLog({
+                prompt: snapshot.text,
+                model: publicGeneration?.modelLabel || "公众生图",
+                config: { ...snapshot.config, count: String(generationCount) },
+                references: snapshot.references,
+                durationMs: 0,
+                successCount: 0,
+                failCount: 0,
+                status: "生成中",
+                task: { requestKey: crypto.randomUUID() },
+                images: [],
+            });
+            try {
+                await saveLog(log);
+                void pollPublicGenerationLog(log);
+            } catch {
+                const error = "无法保存生图任务，请重试";
+                setResults((value) => value.map((result) => ({ ...result, status: "failed", error })));
+                setRunning(false);
+                message.error(error);
+            }
+            return;
+        }
+
         let successImages: GeneratedImage[] = [];
         let failureMessage: string | undefined;
-
-        if (publicMode) {
-            try {
-                const batch = await generateImages({
-                    requestKey: crypto.randomUUID(),
-                    prompt: snapshot.text,
-                    count: generationCount,
-                    size: snapshot.config.size,
-                    quality: snapshot.config.quality,
-                    references: snapshot.references,
-                });
-                if (batch.quota) applyPublicQuota(batch.quota);
-                const resultByIndex = new Map(batch.results.map((result) => [result.index, result]));
-                const images = await Promise.all(
-                    Array.from({ length: generationCount }, async (_, index) => {
-                        const result = resultByIndex.get(index);
-                        if (!result) {
-                            setResults((value) => updateResultAt(value, index, { status: "failed", error: "服务未返回该图片的生成结果" }));
-                            return null;
-                        }
-                        if (result.status !== "success" || !result.image) {
-                            setResults((value) => updateResultAt(value, index, { status: "failed", error: publicGenerationError(result.errorCode) }));
-                            return null;
-                        }
-                        const image = await toGeneratedImage(result, performance.now() - batchStartedAt);
-                        setResults((value) => updateResultAt(value, index, { status: "success", image }));
-                        return image;
-                    }),
-                );
-                successImages = images.filter((image): image is GeneratedImage => Boolean(image));
-            } catch (error) {
-                failureMessage = publicGenerationError(error instanceof Error ? error.message : undefined);
-                setResults((value) => value.map((result) => ({ ...result, status: "failed", error: failureMessage, image: undefined })));
-                void refreshPublicQuota();
-            }
-        } else {
-            const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot));
-            const settled = await Promise.allSettled(tasks);
-            successImages = settled.flatMap((item) => (item.status === "fulfilled" ? [item.value] : []));
-            const failed = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
-            failureMessage = failed?.reason instanceof Error ? failed.reason.message : undefined;
-        }
+        const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot));
+        const settled = await Promise.allSettled(tasks);
+        successImages = settled.flatMap((item) => (item.status === "fulfilled" ? [item.value] : []));
+        const failed = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
+        failureMessage = failed?.reason instanceof Error ? failed.reason.message : undefined;
 
         const successCount = successImages.length;
         const failCount = generationCount - successCount;
@@ -258,10 +256,10 @@ export default function ImagePage() {
                 }),
             );
             const logImages = storedImages.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
-            saveLog(
+            await saveLog(
                 buildLog({
                     prompt: snapshot.text,
-                    model: publicMode ? publicGeneration?.modelLabel || "公众生图" : model,
+                    model,
                     config: { ...snapshot.config, count: String(generationCount) },
                     references: snapshot.references,
                     durationMs: performance.now() - batchStartedAt,
@@ -361,11 +359,25 @@ export default function ImagePage() {
         setDeleteConfirmOpen(false);
     };
 
-    const saveLog = (log: GenerationLog) => {
-        void logStore.setItem(log.id, serializeLog(log)).then(refreshLogs);
+    const saveLog = async (log: GenerationLog) => {
+        await logStore.setItem(log.id, serializeLog(log));
+        await refreshLogs();
     };
 
-    const refreshLogs = async () => setLogs(await readStoredLogs());
+    const refreshLogs = async () => {
+        const nextLogs = await readStoredLogs();
+        if (!mountedRef.current) return nextLogs;
+        setLogs(nextLogs);
+        resumePendingLogs(nextLogs);
+        return nextLogs;
+    };
+
+    const resumePendingLogs = (items: GenerationLog[]) => {
+        if (!publicMode) return;
+        for (const log of items) {
+            if (log.status === "生成中" && log.task?.requestKey) void pollPublicGenerationLog(log);
+        }
+    };
 
     const previewGenerationLog = async (log: GenerationLog) => {
         setPreviewLog(log);
@@ -378,7 +390,13 @@ export default function ImagePage() {
         if (log.config.quality) updateConfig("quality", log.config.quality);
         if (log.config.size) updateConfig("size", log.config.size);
         if (log.config.count) updateConfig("count", String(normalizeImageGenerationCount(log.config.count)));
-        setResults(log.images.map((image) => ({ id: image.id, status: "success", image })));
+        if (log.status === "生成中") {
+            setResults(pendingResults(log));
+        } else if (log.images.length) {
+            setResults(log.images.map((image) => ({ id: image.id, status: "success", image })));
+        } else {
+            setResults(failedResults(log, log.error || "生成失败"));
+        }
     };
 
     const buildRequestSnapshot = (requestedCount = generationCount) => {
@@ -444,6 +462,136 @@ export default function ImagePage() {
         }
     };
 
+    const pollPublicGenerationLog = async (initialLog: GenerationLog) => {
+        if (!mountedRef.current || generationControllersRef.current.has(initialLog.id) || initialLog.status !== "生成中" || !initialLog.task?.requestKey) return;
+        const controller = new AbortController();
+        generationControllersRef.current.set(initialLog.id, controller);
+        const restoredElapsedMs = Math.max(0, Date.now() - initialLog.createdAt);
+        setRunning(true);
+        setElapsedMs(restoredElapsedMs);
+        setStartedAt((value) => value || performance.now() - restoredElapsedMs);
+        setPreviewLog((value) => value || initialLog);
+        setResults((value) => (value.length ? value : pendingResults(initialLog)));
+
+        let log = initialLog;
+        const task = initialLog.task;
+        if (!task) return;
+        try {
+            const count = normalizeImageGenerationCount(log.config.count || log.imageCount);
+            const batch = task.taskId
+                ? await resumePublicGeneration(task.taskId, { signal: controller.signal, expiresAt: task.expiresAt })
+                : await generateImages({
+                      requestKey: task.requestKey,
+                      prompt: log.prompt,
+                      count,
+                      size: log.config.size,
+                      quality: log.config.quality,
+                      references: log.references,
+                      signal: controller.signal,
+                      onTaskCreated: async (task) => {
+                          log = { ...log, task };
+                          try {
+                              await saveLog(log);
+                          } catch {
+                              message.warning("任务编号暂未写入本地，返回页面后会自动重新确认任务");
+                          }
+                      },
+                  });
+            if (controller.signal.aborted) return;
+            await completePublicGenerationLog(log, batch);
+        } catch (error) {
+            if (!isAbortError(error)) await failPublicGenerationLog(log, error);
+        } finally {
+            if (generationControllersRef.current.get(initialLog.id) === controller) generationControllersRef.current.delete(initialLog.id);
+            if (!generationControllersRef.current.size) {
+                setRunning(false);
+                setStartedAt(0);
+            }
+        }
+    };
+
+    const completePublicGenerationLog = async (log: GenerationLog, batch: GenerationBatch) => {
+        if (batch.quota) applyPublicQuota(batch.quota);
+        const count = normalizeImageGenerationCount(log.config.count || log.imageCount);
+        const durationMs = Math.max(0, Date.now() - log.createdAt);
+        const resultByIndex = new Map(batch.results.map((result) => [result.index, result]));
+        const failureMessages: string[] = [];
+        const images = await Promise.all(
+            Array.from({ length: count }, async (_, index) => {
+                const result = resultByIndex.get(index);
+                const error = !result ? "服务未返回该图片的生成结果" : result.status !== "success" || !result.image ? publicGenerationError(result.errorCode) : "";
+                if (error) {
+                    failureMessages.push(error);
+                    setResults((value) => updateResultAt(value, index, { status: "failed", error, image: undefined }));
+                    return null;
+                }
+                try {
+                    const image = await toGeneratedImage(result!, durationMs);
+                    setResults((value) => updateResultAt(value, index, { status: "success", image, error: undefined }));
+                    return image;
+                } catch (imageError) {
+                    const errorMessage = imageError instanceof Error ? imageError.message : "生成图片无法读取";
+                    failureMessages.push(errorMessage);
+                    setResults((value) => updateResultAt(value, index, { status: "failed", error: errorMessage, image: undefined }));
+                    return null;
+                }
+            }),
+        );
+        const successImages = images.filter((image): image is GeneratedImage => Boolean(image));
+        const storedImages = await Promise.allSettled(
+            successImages.map(async (image) => {
+                const stored = await uploadImage(image.dataUrl);
+                return { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
+            }),
+        );
+        const logImages = storedImages.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+        const successCount = successImages.length;
+        const nextLog: GenerationLog = {
+            ...log,
+            durationMs,
+            successCount,
+            failCount: count - successCount,
+            status: successCount ? "成功" : "失败",
+            task: undefined,
+            error: successCount ? undefined : failureMessages[0] || "生成失败",
+            images: logImages,
+            thumbnails: logImages.map((image) => image.dataUrl).filter(Boolean),
+        };
+        setPreviewLog(nextLog);
+        try {
+            await saveLog(nextLog);
+            if (storedImages.length !== logImages.length) message.warning("部分图片未能写入本地记录，但可继续下载或重试");
+        } catch {
+            message.warning("生成结果未能写入本地记录，返回页面后会继续尝试恢复");
+        }
+        successCount ? message.success("图片已生成") : message.error(nextLog.error || "生成失败");
+    };
+
+    const failPublicGenerationLog = async (log: GenerationLog, cause: unknown) => {
+        const error = publicGenerationError(cause instanceof Error ? cause.message : undefined);
+        const count = normalizeImageGenerationCount(log.config.count || log.imageCount);
+        const nextLog: GenerationLog = {
+            ...log,
+            durationMs: Math.max(0, Date.now() - log.createdAt),
+            successCount: 0,
+            failCount: count,
+            status: "失败",
+            task: undefined,
+            error,
+            images: [],
+            thumbnails: [],
+        };
+        setPreviewLog(nextLog);
+        setResults(failedResults(nextLog, error));
+        try {
+            await saveLog(nextLog);
+        } catch {
+            message.warning("生成失败记录未能写入本地");
+        }
+        void refreshPublicQuota();
+        message.error(error);
+    };
+
     const retryResult = async (index: number) => {
         const snapshot = buildRequestSnapshot(publicMode ? 1 : generationCount);
         if (!snapshot) return;
@@ -472,7 +620,7 @@ export default function ImagePage() {
             const stored = await uploadImage(image.dataUrl);
             const logImage = { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
             setResults((value) => updateResultAt(value, index, { image: { ...image, dataUrl: stored.url, storageKey: stored.storageKey } }));
-            saveLog(
+            await saveLog(
                 buildLog({
                     prompt: snapshot.text,
                     model: publicMode ? publicGeneration?.modelLabel || "公众生图" : model,
@@ -843,6 +991,19 @@ function updateResultAt(results: GenerationResult[], index: number, next: Partia
     return results.map((item, itemIndex) => (itemIndex === index ? { ...item, ...next } : item));
 }
 
+function pendingResults(log: GenerationLog): GenerationResult[] {
+    const count = normalizeImageGenerationCount(log.config.count || log.imageCount);
+    return Array.from({ length: count }, (_, index) => ({ id: `${log.id}-${index}`, status: "pending" }));
+}
+
+function failedResults(log: GenerationLog, error: string): GenerationResult[] {
+    return pendingResults(log).map((result) => ({ ...result, status: "failed", error }));
+}
+
+function isAbortError(error: unknown) {
+    return error instanceof Error && error.name === "AbortError";
+}
+
 function LogPanel({
     logs,
     selectedLogIds,
@@ -924,20 +1085,30 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                 </div>
                 <div className="grid justify-items-end gap-2">
                     <div className="flex gap-1">
-                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="blue">
-                            成功 {log.successCount ?? log.imageCount}
-                        </Tag>
-                        {log.failCount ? (
-                            <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="red">
-                                失败 {log.failCount}
+                        {log.status === "生成中" ? (
+                            <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="blue">
+                                生成中
                             </Tag>
-                        ) : null}
+                        ) : (
+                            <>
+                                <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="blue">
+                                    成功 {log.successCount ?? log.imageCount}
+                                </Tag>
+                                {log.failCount ? (
+                                    <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="red">
+                                        失败 {log.failCount}
+                                    </Tag>
+                                ) : null}
+                            </>
+                        )}
                     </div>
                     <div className="flex flex-wrap justify-end gap-1">
                         <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none">{log.imageCount} 张</Tag>
-                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="green">
-                            {formatDuration(log.durationMs)}
-                        </Tag>
+                        {log.status !== "生成中" ? (
+                            <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="green">
+                                {formatDuration(log.durationMs)}
+                            </Tag>
+                        ) : null}
                     </div>
                     <div className="flex justify-end">
                         <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none">{log.time}</Tag>
@@ -992,6 +1163,8 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         size: log.size || config.size || "",
         quality: log.quality || config.quality || "",
         status: log.status || "成功",
+        task: log.task?.requestKey ? log.task : undefined,
+        error: log.error,
         images,
         thumbnails: images.map((image) => image.dataUrl).filter(Boolean),
     };
@@ -1025,6 +1198,8 @@ function buildLog({
     successCount,
     failCount,
     status,
+    task,
+    error,
     images,
 }: {
     prompt: string;
@@ -1035,6 +1210,8 @@ function buildLog({
     successCount: number;
     failCount: number;
     status: GenerationLog["status"];
+    task?: GenerationLog["task"];
+    error?: string;
     images: GeneratedImage[];
 }): GenerationLog {
     const logConfig = {
@@ -1060,6 +1237,8 @@ function buildLog({
         size: logConfig.size,
         quality: logConfig.quality,
         status,
+        task,
+        error,
         images,
         thumbnails: images.map((image) => image.dataUrl).filter(Boolean),
     };

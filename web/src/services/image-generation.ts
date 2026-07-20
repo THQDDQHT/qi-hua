@@ -24,6 +24,12 @@ export type GenerationBatch = {
     replayed?: boolean;
 };
 
+export type PublicImageGenerationTask = {
+    taskId: string;
+    requestKey: string;
+    expiresAt?: string;
+};
+
 export type GenerateImagesInput = {
     requestKey?: string;
     prompt: string;
@@ -34,6 +40,7 @@ export type GenerateImagesInput = {
     mask?: ReferenceImage;
     signal?: AbortSignal;
     selfHostedConfig?: AiConfig;
+    onTaskCreated?: (task: PublicImageGenerationTask) => void | Promise<void>;
 };
 
 export type ResumePublicGenerationOptions = {
@@ -403,6 +410,7 @@ export function createImageGenerationFacade(dependencies: ImageGenerationDepende
             }
             if (Array.isArray(payload.results)) return publicBatch(payload, input.signal);
             if (!payload.taskId) throw new InvalidTaskResponseError("生图任务没有返回任务编号");
+            await input.onTaskCreated?.({ taskId: payload.taskId, requestKey, ...(payload.expiresAt ? { expiresAt: payload.expiresAt } : {}) });
             return waitForPublicGeneration(payload.taskId, {
                 signal: input.signal,
                 expiresAt: payload.expiresAt,
