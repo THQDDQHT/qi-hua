@@ -16,6 +16,11 @@ export type PublicSessionResponse = {
   };
 };
 
+export type MiniappSessionResponse = Omit<PublicSessionResponse, "mode"> & {
+  mode: "miniapp";
+  token: string;
+};
+
 export function registerSessionRoutes(app: Hono<AppEnv>, sql: Sql) {
   async function currentQuota(clientId: string, quotaDate: string, resetAt: string, limit: number) {
     return formatQuotaSnapshot({
@@ -55,5 +60,32 @@ export function registerSessionRoutes(app: Hono<AppEnv>, sql: Sql) {
       context.get("resetAt"),
       config.dailyDeviceLimit,
     ));
+  });
+
+  app.post("/api/miniapp/session", async (context) => {
+    const config = context.get("config");
+    const token = context.get("miniappToken") ?? context.req.header("X-Miniapp-Token");
+    if (!token) {
+      return context.json({ error: { code: "INVALID_REQUEST", message: "缺少小程序会话凭证" } }, 401);
+    }
+    const quota = await currentQuota(
+      context.get("clientId"),
+      context.get("quotaDate"),
+      context.get("resetAt"),
+      config.dailyDeviceLimit,
+    );
+    const response: MiniappSessionResponse = {
+      mode: "miniapp",
+      token,
+      quota,
+      generation: {
+        enabled: config.publicGenerationEnabled,
+        ...(!config.publicGenerationEnabled ? { disabledReason: "免费生图当前由服务端暂停，请稍后重试。" } : {}),
+        modelLabel: "免费生图模型",
+        maxPromptLength: GENERATION_POLICY.maxPromptLength,
+        maxReferenceImages: GENERATION_POLICY.maxReferenceImages,
+      },
+    };
+    return context.json(response);
   });
 }

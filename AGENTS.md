@@ -54,6 +54,14 @@
 - 图片节点尺寸逻辑要尊重原始比例，除非功能明确要求自由变形。
 - 批量生成、多图展示、助手面板等画布交互要尽量简洁，不要占用过多画布空间。
 
+## 小程序规范（miniapp/）
+
+- 小程序使用 Taro 4 + React 18 + TypeScript，不引 UI 组件库和 Tailwind；样式用普通 CSS（designWidth 375，代码里 1px = 2rpx，按 iPhone 点位写尺寸）。
+- AI 请求统一经 `server/` 中转（`X-Miniapp-Token` 匿名会话），小程序端不做用户自带 key 直连。
+- 图片二进制一律用 `FileSystemManager` 落盘到用户文件目录，元数据走 storage；小程序没有 Blob/IndexedDB/ObjectURL。
+- 与 web 复用的纯逻辑放在 `miniapp/src/shared/`，目前是手动拷贝同步，改动时注意两边一致。
+- 小程序用户可见产品名称统一为“啟画”，命名和简介避免“AI 绘画”等审核敏感词。
+
 ## 文档规范
 
 - README 保持简洁，只放项目介绍、核心功能、快速开始和文档入口。

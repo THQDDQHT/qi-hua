@@ -20,6 +20,7 @@ export type ServerConfig = {
   generationStorageDir: string;
   generationResultTtlSeconds: number;
   workerHealthPort: number;
+  promptLibraryDir: string;
 };
 
 type Env = Record<string, string | undefined>;
@@ -100,6 +101,10 @@ export function loadConfig(env: Env): ServerConfig {
   if (!generationStorageDir.startsWith("/")) {
     throw new Error("GENERATION_STORAGE_DIR must be an absolute path");
   }
+  const promptLibraryDir = env.PROMPT_LIBRARY_DIR ?? "/data/prompt-library";
+  if (!promptLibraryDir.startsWith("/")) {
+    throw new Error("PROMPT_LIBRARY_DIR must be an absolute path");
+  }
 
   return {
     port,
@@ -122,6 +127,7 @@ export function loadConfig(env: Env): ServerConfig {
     imageWorkerConcurrency,
     generationStorageDir,
     generationResultTtlSeconds: integer(env, "GENERATION_RESULT_TTL_SECONDS", 86400),
+    promptLibraryDir,
     workerHealthPort: (() => {
       const value = integer(env, "WORKER_HEALTH_PORT", 3002);
       if (value > 65535) throw new Error("WORKER_HEALTH_PORT must be between 1 and 65535");

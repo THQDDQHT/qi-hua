@@ -18,6 +18,10 @@ services:
         read_only: false
         bind:
           create_host_path: false
+      - type: bind
+        source: ./data/prompt-library
+        target: /data/prompt-library
+        read_only: true
     restart: unless-stopped
     networks:
       - public-internal

@@ -67,7 +67,12 @@ export function registerImageRoutes(app: Hono<AppEnv>, generationService: Genera
       size: form.get("size"),
       quality: form.get("quality"),
     });
-    const files = form.getAll("references");
+    // 小程序 wx.uploadFile 只能以 file 字段上传单文件，浏览器端用 references 字段。
+    let files = form.getAll("references");
+    if (files.length === 0) {
+      const single = form.get("file");
+      if (single !== null) files = [single];
+    }
     if (files.some((value) => !(value instanceof File))) {
       throw new PublicGenerationError("INVALID_IMAGE", "参考图字段无效");
     }

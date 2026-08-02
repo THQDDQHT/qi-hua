@@ -1,0 +1,41 @@
+page {
+  --color-bg: #f6f6f8;
+  --color-card: #ffffff;
+  --color-text: #1c1c1e;
+  --color-text-secondary: #8a8a8e;
+  --color-border: #e5e5ea;
+  --color-primary: #1c1c1e;
+  --color-danger: #d92d20;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.page-body {
+  padding: 12px;
+}
+
+.card {
+  background: var(--color-card);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.text-secondary {
+  color: var(--color-text-secondary);
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: #ffffff;
+  border-radius: 8px;
+  font-size: 15px;
+}
+
+.empty-state {
+  padding: 64px 24px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
