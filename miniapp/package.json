@@ -9,8 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "browserslist": [
-    "defaults and fully supports es6-module",
-    "maintained node versions"
+    "ios >= 9",
+    "android >= 5"
   ],
   "dependencies": {
     "@babel/runtime": "^7.24.4",

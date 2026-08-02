@@ -14,16 +14,28 @@ import {
   type GenerationQuality,
   type GenerationSize,
 } from "@/shared/generation-policy";
-import { createId, formatDateTime } from "@/lib/utils";
+import { createId } from "@/lib/utils";
 import "./index.css";
 
 const MAX_POLL_FAILURES = 3;
+const COLUMN_WIDTH = 170.5;
+
+function skeletonHeight(size: string): number {
+  let ratio = 0.75;
+  const colon = /^(\d+):(\d+)$/.exec(size);
+  const pixel = /^(\d+)x(\d+)$/.exec(size);
+  if (colon) ratio = Number(colon[2]) / Number(colon[1]);
+  else if (pixel) ratio = Number(pixel[2]) / Number(pixel[1]);
+  return Math.round(COLUMN_WIDTH * ratio);
+}
 
 export default function GeneratePage() {
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState<GenerationSize>("auto");
   const [quality, setQuality] = useState<GenerationQuality>("auto");
+  const [picker, setPicker] = useState<"size" | "quality" | null>(null);
   const [refImagePath, setRefImagePath] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ generation: Generation; path: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const pollFailuresRef = useRef<Record<string, number>>({});
@@ -155,7 +167,13 @@ export default function GeneratePage() {
   }
 
   function handlePreview(generation: Generation, current: string) {
-    Taro.previewImage({ urls: generation.resultPaths, current });
+    setPreview({ generation, path: current });
+  }
+
+  function handleSetReference(path: string) {
+    setRefImagePath(path);
+    setPreview(null);
+    Taro.showToast({ title: "已设为参考图", icon: "none" });
   }
 
   function handleSaveToAlbum(path: string) {
@@ -176,10 +194,7 @@ export default function GeneratePage() {
     Taro.showActionSheet({ itemList: ["保存到相册", "设为参考图", "删除这条记录"] })
       .then(({ tapIndex }) => {
         if (tapIndex === 0) handleSaveToAlbum(path);
-        if (tapIndex === 1) {
-          setRefImagePath(path);
-          Taro.showToast({ title: "已设为参考图", icon: "none" });
-        }
+        if (tapIndex === 1) handleSetReference(path);
         if (tapIndex === 2) useGenerationStore.getState().deleteGeneration(generation.id);
       })
       .catch(() => {});
@@ -190,7 +205,7 @@ export default function GeneratePage() {
       title: "清除本地记录",
       content: "本机保存的全部生成记录和图片将被删除，不可恢复。",
       confirmText: "全部清除",
-      confirmColor: "#d92d20",
+      confirmColor: "#e5484d",
     }).then(({ confirm }) => {
       if (confirm) {
         useGenerationStore.getState().clearAll();
@@ -198,6 +213,13 @@ export default function GeneratePage() {
       }
     });
   }
+
+  const columns: [Generation[], Generation[]] = [[], []];
+  generations.forEach((generation, index) => columns[index % 2].push(generation));
+
+  const pickerOptions = picker === "size" ? GENERATION_SIZES : GENERATION_QUALITIES;
+  const pickerLabels = picker === "size" ? SIZE_LABELS : QUALITY_LABELS;
+  const pickerValue = picker === "size" ? size : quality;
 
   return (
     <View className="page-body generate-page">
@@ -211,106 +233,161 @@ export default function GeneratePage() {
           onInput={(event) => setPrompt(event.detail.value)}
         />
 
-        {refImagePath && (
-          <View className="ref-chip">
-            <Image className="ref-chip-image" src={refImagePath} mode="aspectFill" />
-            <Text className="ref-chip-label">参考图</Text>
-            <Text className="ref-chip-remove" onClick={() => setRefImagePath(null)}>
-              ×
-            </Text>
+        <View className="composer-toolbar">
+          {refImagePath ? (
+            <View key="ref-thumb" className="ref-thumb">
+              <Image className="ref-thumb-image" src={refImagePath} mode="aspectFill" />
+              <Text className="ref-thumb-remove" onClick={() => setRefImagePath(null)}>
+                ×
+              </Text>
+            </View>
+          ) : (
+            <View key="ref-capsule" className="ref-capsule" onClick={handlePickReference}>
+              <Text className="ref-capsule-plus">+</Text>
+              <Text>参考图</Text>
+            </View>
+          )}
+          <View className="toolbar-spacer" />
+          <View className="picker-capsule" onClick={() => setPicker("size")}>
+            <Text className="capsule-dim">尺寸·</Text>
+            <Text>{SIZE_LABELS[size]}</Text>
+            <Text className="picker-capsule-arrow">▾</Text>
           </View>
+          <View className="picker-capsule" onClick={() => setPicker("quality")}>
+            <Text className="capsule-dim">画质·</Text>
+            <Text>{QUALITY_LABELS[quality]}</Text>
+            <Text className="picker-capsule-arrow">▾</Text>
+          </View>
+        </View>
+
+        <Button
+          className="btn-primary generate-btn"
+          hover-class="none"
+          disabled={submitting}
+          onClick={handleGenerate}
+        >
+          {submitting ? "提交中…" : "✨ 生成"}
+        </Button>
+        {quota && (
+          <Text className="quota-hint text-secondary">今日剩余 {quota.remaining}/{quota.limit} 张</Text>
         )}
-
-        <View className="option-row">
-          <Text className="option-label">尺寸</Text>
-          <View className="option-scroll">
-            {GENERATION_SIZES.map((item) => (
-              <Text
-                key={item}
-                className={`option-chip${size === item ? " option-chip-active" : ""}`}
-                onClick={() => setSize(item)}
-              >
-                {SIZE_LABELS[item]}
-              </Text>
-            ))}
-          </View>
-        </View>
-        <View className="option-row">
-          <Text className="option-label">质量</Text>
-          <View className="option-scroll">
-            {GENERATION_QUALITIES.map((item) => (
-              <Text
-                key={item}
-                className={`option-chip${quality === item ? " option-chip-active" : ""}`}
-                onClick={() => setQuality(item)}
-              >
-                {QUALITY_LABELS[item]}
-              </Text>
-            ))}
-          </View>
-        </View>
-
-        <View className="composer-actions">
-          <Text className="quota-hint text-secondary">
-            {quota ? `今日剩余 ${quota.remaining}/${quota.limit} 张` : ""}
-          </Text>
-          <View className="composer-buttons">
-            <Button className="ref-btn" onClick={handlePickReference}>
-              加参考图
-            </Button>
-            <Button className="btn-primary generate-btn" disabled={submitting} onClick={handleGenerate}>
-              {submitting ? "提交中…" : "生成"}
-            </Button>
-          </View>
-        </View>
       </View>
 
       {generations.length === 0 ? (
-        <View className="empty-state">输入提示词，生成第一张图</View>
+        <View className="empty-state">
+          <View className="empty-visual">✨</View>
+          <View className="empty-title">输入提示词，生成第一张图</View>
+          <View>加「参考图」可以让 AI 照着你的图画</View>
+        </View>
       ) : (
         <View className="history-list">
-          {generations.map((generation) => (
-            <View key={generation.id} className="history-card card">
-              <View className="history-head">
-                <Text className="history-prompt">{generation.prompt}</Text>
-                <Text className="history-time text-secondary">{formatDateTime(generation.createdAt)}</Text>
-              </View>
-              {generation.status === "pending" && (
-                <View className="history-pending">
-                  <Text className="text-secondary">生成中，请稍候…</Text>
+          {columns.map((column, columnIndex) => (
+            <View key={columnIndex} className="history-column">
+              {column.map((generation) => (
+                <View key={generation.id} className="h-card">
+                  {generation.status === "pending" && (
+                    <View className="h-skeleton" style={{ height: `${skeletonHeight(generation.size)}px` }}>
+                      <Text className="h-skeleton-text">生成中…</Text>
+                    </View>
+                  )}
+                  {generation.status === "failed" && (
+                    <View className="h-failed">
+                      <Text className="h-failed-text">{generation.error ?? "生成失败"}</Text>
+                      <Text
+                        className="h-failed-delete"
+                        onClick={() => useGenerationStore.getState().deleteGeneration(generation.id)}
+                      >
+                        删除这条记录
+                      </Text>
+                    </View>
+                  )}
+                  {generation.status === "success" &&
+                    generation.resultPaths.map((path) => (
+                      <View key={path} className="h-image-wrap">
+                        <Image
+                          className="h-image"
+                          src={path}
+                          mode="widthFix"
+                          lazyLoad
+                          onClick={() => handlePreview(generation, path)}
+                          onLongPress={() => handleGenerationActions(generation, path)}
+                        />
+                        <Text
+                          className="h-download"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleSaveToAlbum(path);
+                          }}
+                        >
+                          ↓
+                        </Text>
+                      </View>
+                    ))}
+                  {generation.status !== "failed" && (
+                    <View className="h-meta">
+                      <Text className="h-prompt">{generation.prompt}</Text>
+                    </View>
+                  )}
                 </View>
-              )}
-              {generation.status === "failed" && (
-                <View className="history-failed">
-                  <Text className="history-failed-text">{generation.error ?? "生成失败"}</Text>
-                  <Text
-                    className="history-delete-link"
-                    onClick={() => useGenerationStore.getState().deleteGeneration(generation.id)}
-                  >
-                    删除
-                  </Text>
-                </View>
-              )}
-              {generation.status === "success" && (
-                <View className="history-images">
-                  {generation.resultPaths.map((path) => (
-                    <Image
-                      key={path}
-                      className="history-image"
-                      src={path}
-                      mode="widthFix"
-                      lazyLoad
-                      onClick={() => handlePreview(generation, path)}
-                      onLongPress={() => handleGenerationActions(generation, path)}
-                    />
-                  ))}
-                </View>
-              )}
+              ))}
             </View>
           ))}
-          <Text className="clear-link" onClick={handleClearAll}>
-            清除本地记录
+        </View>
+      )}
+
+      {generations.length > 0 && (
+        <Text className="clear-link" onClick={handleClearAll}>
+          清除本地记录
+        </Text>
+      )}
+
+      {picker && (
+        <View className="picker-mask" onClick={() => setPicker(null)}>
+          <View className="picker-panel" onClick={(event) => event.stopPropagation()}>
+            <Text className="picker-title">{picker === "size" ? "选择尺寸" : "选择质量"}</Text>
+            <Text className="picker-hint">
+              {picker === "size"
+                ? "不确定就选「智能比例」，AI 会按提示词内容决定画幅"
+                : "不确定就选「默认」，自动平衡速度和画质"}
+            </Text>
+            <View className="picker-grid">
+              {pickerOptions.map((item) => (
+                <Text
+                  key={item}
+                  className={`picker-option${pickerValue === item ? " picker-option-active" : ""}`}
+                  onClick={() => {
+                    if (picker === "size") setSize(item as GenerationSize);
+                    else setQuality(item as GenerationQuality);
+                    setPicker(null);
+                  }}
+                >
+                  {pickerLabels[item as GenerationSize & GenerationQuality]}
+                </Text>
+              ))}
+            </View>
+          </View>
+        </View>
+      )}
+      {preview && (
+        <View className="preview-mask" onClick={() => setPreview(null)}>
+          <Image className="preview-image" src={preview.path} mode="aspectFit" />
+          <Text
+            className="preview-close"
+            onClick={(event) => {
+              event.stopPropagation();
+              setPreview(null);
+            }}
+          >
+            ×
           </Text>
+          <View className="preview-actions" onClick={(event) => event.stopPropagation()}>
+            <Text className="preview-btn" onClick={() => handleSaveToAlbum(preview.path)}>
+              保存到相册
+            </Text>
+            <Text className="preview-btn" onClick={() => handleSetReference(preview.path)}>
+              设为参考图
+            </Text>
+          </View>
         </View>
       )}
     </View>

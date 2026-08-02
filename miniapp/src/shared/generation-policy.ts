@@ -6,7 +6,7 @@ export const GENERATION_QUALITIES = ["auto", "high", "medium", "low"] as const;
 export type GenerationQuality = (typeof GENERATION_QUALITIES)[number];
 
 export const SIZE_LABELS: Record<GenerationSize, string> = {
-  auto: "智能",
+  auto: "智能比例",
   "1:1": "1:1 方形",
   "3:2": "3:2 横版",
   "2:3": "2:3 竖版",
@@ -17,7 +17,7 @@ export const SIZE_LABELS: Record<GenerationSize, string> = {
 };
 
 export const QUALITY_LABELS: Record<GenerationQuality, string> = {
-  auto: "自动",
+  auto: "默认",
   high: "高清",
   medium: "标准",
   low: "快速",
