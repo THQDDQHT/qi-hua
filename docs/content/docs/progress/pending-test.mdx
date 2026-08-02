@@ -5,7 +5,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
-- 微信小程序裁剪版：`miniapp/` 目录 `bun install && bun run dev:weapp` 构建后可导入微信开发者工具；需真机验证打开即生图（输入提示词 → 提交 → 轮询 → 历史网格）、图生图（相册/历史图设参考，≤1 张）、保存相册授权引导、长按图片操作菜单、底部清除本地记录、提示词库拉取/搜索/一键填入生图页、分享卡片。
+- 微信小程序裁剪版：`miniapp/` 目录 `bun install && bun run dev:weapp` 构建后可导入微信开发者工具；需真机验证打开即生图（输入提示词 → 提交 → 轮询 → 历史网格）、图生图（相册/历史图设参考，≤1 张）、保存相册授权引导、长按图片操作菜单、底部清除本地记录、分享卡片。
 - 服务端小程序支持：无凭证 `POST /api/miniapp/session` 应返回 43 位 token 与配额；携带 `X-Miniapp-Token` 可免 Origin/CF-IP 调用配额与生图接口；非法格式 token 返回 403；`GET /prompt-library/prompts.json` 与封面可直接访问；图生图 `file` 字段上传与浏览器 `references` 字段行为一致；需回归浏览器公众版会话、配额与生图流程不受影响（新增 `server/tests/miniapp-session.test.ts` 覆盖会话链路）。
 
 - 公众访问域名：`PUBLIC_WEB_HOST` 与 `PUBLIC_ORIGIN` 应统一为新域名；新域名的页面、健康检查和会话接口应正常，旧域名及其他 `Host` 应被 Tunnel 移除并由 Nginx 返回 `403`，写接口携带旧 `Origin` 时也应返回 `403`。

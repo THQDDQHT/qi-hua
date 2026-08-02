@@ -4,7 +4,6 @@ import { useRef, useState } from "react";
 import * as api from "@/services/api";
 import { persistTempFile } from "@/services/file-storage";
 import { useConfigStore } from "@/stores/use-config-store";
-import { usePendingPromptStore } from "@/stores/use-pending-prompt-store";
 import { useGenerationStore, type Generation } from "@/stores/use-generation-store";
 import {
   GENERATION_QUALITIES,
@@ -34,11 +33,6 @@ export default function GeneratePage() {
   const generationInfo = useConfigStore((state) => state.generation);
 
   useDidShow(() => {
-    const pending = usePendingPromptStore.getState().consumePendingPrompt();
-    if (pending) {
-      setPrompt((current) => (current.trim() ? `${current}\n${pending}` : pending));
-      Taro.showToast({ title: "提示词已填入", icon: "none" });
-    }
     if (!useConfigStore.getState().sessionReady) {
       void useConfigStore.getState().initSession();
     }

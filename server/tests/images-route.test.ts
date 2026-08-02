@@ -27,7 +27,6 @@ const config: ServerConfig = {
   imageWorkerConcurrency: 5,
   generationStorageDir: "/tmp/infinite-canvas-test",
   generationResultTtlSeconds: 86400,
-  promptLibraryDir: "/tmp/infinite-canvas-test-prompt-library",
   workerHealthPort: 3002,
 };
 
