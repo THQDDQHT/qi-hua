@@ -258,15 +258,38 @@
 
 .h-meta {
   padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .h-prompt {
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   color: var(--color-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   display: block;
+}
+
+.h-aigc-mark {
+  flex-shrink: 0;
+  font-size: 9px;
+  color: var(--color-primary-text);
+  background: var(--color-primary-soft);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+
+.h-aigc-notice {
+  display: block;
+  padding: 8px 10px 2px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #5f5f6e;
 }
 
 .h-time {
@@ -299,6 +322,23 @@
   font-size: 12px;
   color: var(--color-text-secondary);
   padding: 20px 0 4px;
+  text-decoration: underline;
+}
+
+.compliance-note {
+  padding: 18px 8px 4px;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+.compliance-links {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 3px;
+  color: var(--color-primary-text);
   text-decoration: underline;
 }
 
@@ -360,6 +400,14 @@
   justify-content: center;
   gap: 12px;
   padding: 14px 16px calc(18px + env(safe-area-inset-bottom));
+}
+
+.preview-aigc-notice {
+  padding: 10px 16px 2px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #ffffff;
 }
 
 .preview-btn {

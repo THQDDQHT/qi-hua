@@ -4,6 +4,7 @@ import type {
   GenerationReferenceManifest,
   GenerationResultManifestItem,
 } from "../domain/public-generation";
+import { addAigcImageLabel } from "./aigc-image-label";
 import type { ProviderImage } from "./image-provider";
 import type { ValidatedReference } from "./image-validation";
 
@@ -81,9 +82,10 @@ export function createGenerationStorage(rootDirectory: string) {
     if (!Number.isSafeInteger(index) || index < 0 || index > 3) {
       throw new TypeError("invalid generation result index");
     }
-    const filename = `executions/${validId(executionId)}/${index}.${extension(image.mimeType)}`;
-    await atomicWrite(controlledPath(requestId, filename), image.bytes);
-    return { index, status: "success", filename, mimeType: image.mimeType };
+    const labeledImage = await addAigcImageLabel(image, requestId, index);
+    const filename = `executions/${validId(executionId)}/${index}.${extension(labeledImage.mimeType)}`;
+    await atomicWrite(controlledPath(requestId, filename), labeledImage.bytes);
+    return { index, status: "success", filename, mimeType: labeledImage.mimeType };
   }
 
   async function openResult(

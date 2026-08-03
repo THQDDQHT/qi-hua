@@ -15,6 +15,8 @@ type ConfigState = {
   setQuota: (quota: api.Quota) => void;
 };
 
+let sessionInitPromise: Promise<void> | null = null;
+
 export const useConfigStore = create<ConfigState>()(
   persist(
     (set, get) => ({
@@ -24,19 +26,25 @@ export const useConfigStore = create<ConfigState>()(
       generation: null,
       sessionReady: false,
 
-      initSession: async () => {
-        if (!get().serverBaseUrl) return;
-        try {
-          const session = await api.createSession();
-          set({
-            token: session.token,
-            quota: session.quota,
-            generation: session.generation,
-            sessionReady: true,
+      initSession: () => {
+        if (!get().serverBaseUrl || get().sessionReady) return Promise.resolve();
+        if (sessionInitPromise) return sessionInitPromise;
+        sessionInitPromise = api.createSession()
+          .then((session) => {
+            set({
+              token: session.token,
+              quota: session.quota,
+              generation: session.generation,
+              sessionReady: true,
+            });
+          })
+          .catch(() => {
+            set({ sessionReady: false });
+          })
+          .finally(() => {
+            sessionInitPromise = null;
           });
-        } catch {
-          set({ sessionReady: false });
-        }
+        return sessionInitPromise;
       },
 
       refreshQuota: async () => {

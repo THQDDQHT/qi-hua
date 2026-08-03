@@ -9,7 +9,7 @@ export type Generation = {
   prompt: string;
   size: string;
   quality: string;
-  refImagePath?: string;
+  taskId?: string;
   resultPaths: string[];
   status: "pending" | "success" | "failed";
   error?: string;
@@ -26,7 +26,6 @@ type GenerationState = {
 
 function deleteGenerationFiles(generation: Generation) {
   generation.resultPaths.forEach(deleteStoredFile);
-  if (generation.refImagePath) deleteStoredFile(generation.refImagePath);
 }
 
 export const useGenerationStore = create<GenerationState>()(
