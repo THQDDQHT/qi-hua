@@ -39,6 +39,7 @@ export default function GeneratePage() {
   const [size, setSize] = useState<GenerationSize>("auto");
   const [quality, setQuality] = useState<GenerationQuality>("auto");
   const [picker, setPicker] = useState<"size" | "quality" | null>(null);
+  const [privacyVisible, setPrivacyVisible] = useState(false);
   const [referenceImage, setReferenceImage] = useState<ReferenceImage | null>(null);
   const [preview, setPreview] = useState<{ generation: Generation; path: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -77,6 +78,11 @@ export default function GeneratePage() {
       ? String(error.errMsg)
       : errorMessage(error, "");
     return /cancel/i.test(message);
+  }
+
+  function privacyErrorCode(error: unknown) {
+    if (typeof error !== "object" || !error || !("errno" in error)) return undefined;
+    return Number(error.errno);
   }
 
   function replaceReference(next: ReferenceImage | null) {
@@ -266,15 +272,50 @@ export default function GeneratePage() {
     }
   }
 
-  function handlePickReference() {
-    Taro.chooseMedia({ count: 1, mediaType: ["image"], sourceType: ["album"] })
-      .then((result) => {
-        const tempPath = result.tempFiles[0]?.tempFilePath;
-        if (tempPath) replaceReference({ path: persistTempFile(tempPath), owned: true });
-      })
-      .catch((error) => {
-        if (!isCancelled(error)) Taro.showToast({ title: "无法读取所选图片，请检查隐私授权", icon: "none" });
+  async function chooseReferenceImage() {
+    let tempPath: string | undefined;
+    try {
+      const result = await Taro.chooseMedia({ count: 1, mediaType: ["image"], sourceType: ["album"] });
+      tempPath = result.tempFiles[0]?.tempFilePath;
+    } catch (error) {
+      if (isCancelled(error)) return;
+      const code = privacyErrorCode(error);
+      if (code === 103 || code === 104) {
+        setPrivacyVisible(true);
+        return;
+      }
+      Taro.showToast({
+        title: code === 112 ? "参考图隐私配置异常" : "无法打开相册，请稍后重试",
+        icon: "none",
       });
+      return;
+    }
+
+    if (!tempPath) {
+      Taro.showToast({ title: "未读取到所选图片，请换一张重试", icon: "none" });
+      return;
+    }
+
+    try {
+      replaceReference({ path: persistTempFile(tempPath), owned: true });
+    } catch {
+      Taro.showToast({ title: "图片暂存失败，请清理本地记录后重试", icon: "none" });
+    }
+  }
+
+  function handlePickReference() {
+    Taro.getPrivacySetting({
+      success: ({ needAuthorization }) => {
+        if (needAuthorization) setPrivacyVisible(true);
+        else void chooseReferenceImage();
+      },
+      fail: () => void chooseReferenceImage(),
+    });
+  }
+
+  function handleAgreePrivacyAuthorization() {
+    setPrivacyVisible(false);
+    void chooseReferenceImage();
   }
 
   function handlePreview(generation: Generation, current: string) {
@@ -532,6 +573,33 @@ export default function GeneratePage() {
                   {pickerLabels[item as GenerationSize & GenerationQuality]}
                 </Text>
               ))}
+            </View>
+          </View>
+        </View>
+      )}
+      {privacyVisible && (
+        <View className="picker-mask" onClick={() => setPrivacyVisible(false)}>
+          <View className="picker-panel" onClick={(event) => event.stopPropagation()}>
+            <Text className="picker-title">选择参考图前请确认</Text>
+            <Text className="privacy-copy">
+              你选择的图片会上传至啟画服务端，并发送给生图服务供应商用于本次生成。
+            </Text>
+            <Text className="privacy-contract-link" onClick={handlePrivacyContract}>
+              查看《啟画隐私保护指引》
+            </Text>
+            <View className="privacy-actions">
+              <Button className="privacy-button privacy-cancel" onClick={() => setPrivacyVisible(false)}>
+                暂不使用
+              </Button>
+              <Button
+                id="agree-privacy-btn"
+                className="privacy-button btn-primary"
+                hoverClass="none"
+                openType="agreePrivacyAuthorization"
+                onAgreePrivacyAuthorization={handleAgreePrivacyAuthorization}
+              >
+                同意并选择
+              </Button>
             </View>
           </View>
         </View>

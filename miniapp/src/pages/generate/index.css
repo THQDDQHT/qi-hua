@@ -168,6 +168,47 @@
   font-weight: 600;
 }
 
+.privacy-copy {
+  display: block;
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+.privacy-contract-link {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--color-primary-text);
+  text-decoration: underline;
+}
+
+.privacy-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.privacy-button {
+  flex: 1;
+  height: 42px;
+  margin: 0;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 42px;
+}
+
+.privacy-button::after {
+  border: none;
+}
+
+.privacy-cancel {
+  background: #f3f2fa;
+  color: var(--color-text);
+}
+
 @keyframes fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
